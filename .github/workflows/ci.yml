@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build (console tools + product)
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags "-s -w" -o bin/traytest.exe ./cmd/traytest
+          go build -trimpath -ldflags "-s -w" -o bin/selftest.exe ./cmd/selftest
+          go build -trimpath -ldflags "-H windowsgui -s -w" -o bin/airtype.exe ./cmd/airtype

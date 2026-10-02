@@ -79,7 +79,22 @@ func BuildInputs(s string) []input {
 // Type 将整段文本注入当前前台窗口，分批调用 SendInput。
 // 任一批未完整注入（如被 UIPI 阻止）即返回错误。
 func Type(s string) error {
-	events := BuildInputs(s)
+	return sendEvents(BuildInputs(s))
+}
+
+// EnterInputs 生成一次完整回车（VK_RETURN down + up）的事件序列。
+// 与 BuildInputs 对 "\n" 的折叠使用同一编码，行为一致。
+func EnterInputs() []input {
+	return keyTap(vkReturn, 0, 0)
+}
+
+// PressEnter 向前台窗口注入一次回车（"自动回车"发送功能）。
+func PressEnter() error {
+	return sendEvents(EnterInputs())
+}
+
+// sendEvents 分批调用 SendInput，任一批未完整注入（如被 UIPI 阻止）即返回错误。
+func sendEvents(events []input) error {
 	for start := 0; start < len(events); start += chunkSize {
 		end := start + chunkSize
 		if end > len(events) {

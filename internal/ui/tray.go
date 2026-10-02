@@ -24,10 +24,10 @@ import (
 type TrayState int
 
 const (
-	StateNeedQR    TrayState = iota // 未登录/需重新扫码（红）
-	StateConnected                  // 一切正常（绿）
-	StateWarning                    // 连接异常/长时间未收到消息（黄）
-	StateDisconnected               // 连接断开（黄）
+	StateNeedQR       TrayState = iota // 未登录/需重新扫码（红）
+	StateConnected                     // 一切正常（绿）
+	StateWarning                       // 连接异常/长时间未收到消息（黄）
+	StateDisconnected                  // 连接断开（黄）
 )
 
 func (s TrayState) String() string {
@@ -56,6 +56,9 @@ type Config struct {
 
 	// TogglePause 切换暂停注入，返回切换后的暂停状态。
 	TogglePause func() bool
+	// AutoEnterEnabled 查询"自动回车"初始状态；ToggleAutoEnter 切换并返回切换后的状态。
+	AutoEnterEnabled func() bool
+	ToggleAutoEnter  func() bool
 	// Rescan 重新扫码（停 bot、删 token、重启）。
 	Rescan func()
 	// Logout 退出登录（删本地 token，回到未扫码状态，停止 bot）。
@@ -76,6 +79,7 @@ type Tray struct {
 	popupVisible atomic.Bool
 
 	pauseAction  *walk.Action
+	autoEnter    *walk.Action
 	state        TrayState
 	paused       bool
 	lastReceived time.Time
@@ -150,6 +154,16 @@ func (t *Tray) buildMenu() {
 	menu.Actions().Add(pause)
 	t.pauseAction = pause
 
+	autoEnter := walk.NewAction()
+	autoEnter.SetText("自动回车")
+	autoEnter.SetCheckable(true)
+	if t.cfg.AutoEnterEnabled != nil {
+		autoEnter.SetChecked(t.cfg.AutoEnterEnabled())
+	}
+	autoEnter.Triggered().Attach(t.toggleAutoEnterMenu)
+	menu.Actions().Add(autoEnter)
+	t.autoEnter = autoEnter
+
 	rescan := walk.NewAction()
 	rescan.SetText("重新扫码")
 	rescan.Triggered().Attach(func() {
@@ -218,6 +232,15 @@ func (t *Tray) buildMenu() {
 		t.mw.Close()
 	})
 	menu.Actions().Add(quit)
+}
+
+// toggleAutoEnterMenu 处理"自动回车"菜单点击：回调业务层切换，
+// 再以返回值刷新勾选态（菜单项本身不自持状态，避免与持久化设置漂移）。
+func (t *Tray) toggleAutoEnterMenu() {
+	if t.cfg.ToggleAutoEnter == nil {
+		return
+	}
+	_ = t.autoEnter.SetChecked(t.cfg.ToggleAutoEnter())
 }
 
 // Run 进入消息循环，阻塞至托盘退出。
@@ -364,6 +387,25 @@ func (t *Tray) PopupCopyForTest(i int) {
 		}
 		t.popup.copyAt(items[i].id)
 	})
+}
+
+// AutoEnterCheckedForTest 返回"自动回车"菜单项勾选态（供自动化测试）。线程安全。
+func (t *Tray) AutoEnterCheckedForTest() bool {
+	done := make(chan bool, 1)
+	t.mw.Synchronize(func() {
+		done <- t.autoEnter != nil && t.autoEnter.Checked()
+	})
+	select {
+	case v := <-done:
+		return v
+	case <-time.After(2 * time.Second):
+		return false
+	}
+}
+
+// TriggerAutoEnterForTest 模拟点击"自动回车"菜单项（走完整切换回调链）。线程安全。
+func (t *Tray) TriggerAutoEnterForTest() {
+	t.mw.Synchronize(t.toggleAutoEnterMenu)
 }
 
 // ShowQR 显示扫码二维码窗口（线程安全）。imageURL 为二维码内容链接。

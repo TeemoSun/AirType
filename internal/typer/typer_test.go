@@ -92,6 +92,23 @@ func TestBuildInputsEmpty(t *testing.T) {
 	}
 }
 
+func TestEnterInputsMatchesNewlineFolding(t *testing.T) {
+	// 自动回车必须与 \n 折叠出的 VK_RETURN 编码完全一致
+	ev := EnterInputs()
+	if len(ev) != 2 {
+		t.Fatalf("事件数 = %d, want 2 (down+up)", len(ev))
+	}
+	ref := BuildInputs("\n")
+	if len(ref) != 2 {
+		t.Fatalf("参考事件数 = %d, want 2", len(ref))
+	}
+	for i := range ev {
+		if ev[i] != ref[i] {
+			t.Errorf("ev[%d] 与 \\n 折叠不一致: %+v vs %+v", i, ev[i], ref[i])
+		}
+	}
+}
+
 func TestChunkingSpansWholeText(t *testing.T) {
 	// 700 个 ASCII 字符 = 1400 事件，应被分成 6 批（1400/256 = 5.47 → 6 批）
 	b := make([]byte, 700)

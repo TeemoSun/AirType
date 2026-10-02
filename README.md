@@ -38,6 +38,7 @@ flowchart LR
 - **常驻托盘**：三态图标一眼看清状态，无需控制台窗口
 - **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出，单击复制、右键删除、失焦自动关闭
 - **暂停注入**：只记录不注入，消息不丢，随时恢复
+- **自动回车**：消息打完自动补一次回车，在聊天窗口里直接发送出去（托盘菜单开关，重启后记住状态）
 - **免扫码重连**：token 本地持久化，重启电脑后自动恢复登录
 - **开机自启**：托盘菜单一键注册计划任务
 - **健康看门狗**：连接异常或长时间收不到消息自动转黄提醒
@@ -63,11 +64,12 @@ flowchart LR
 
 - **左键托盘**：红色时弹扫码窗；否则弹出历史消息弹窗
 - **历史弹窗**：单击条目复制到剪贴板，右键可复制 / 删除，点窗口外自动关闭
-- **右键菜单**：暂停注入 / 重新扫码 / 退出登录 / 清空历史 / 打开日志 / 开机自启 / 退出
+- **右键菜单**：暂停注入 / 自动回车 / 重新扫码 / 退出登录 / 清空历史 / 打开日志 / 开机自启 / 退出
 
 ## ⚠️ 注意事项
 
 - **换行即回车**：消息中的换行以回车键注入。在"Enter 即发送"的输入框（如微信 PC 版聊天框）里，多行文本会被逐行发送出去
+- **自动回车即发送**：开启"自动回车"后，每条消息注入完都会补一次回车——在聊天应用里等于消息直接发出去，注意别把焦点留在会误发的窗口
 - **只收不发**：AirType 不会以你的身份回复或发送任何消息，仅被动接收
 - **需要管理员权限**：这是向任意（含高权限）窗口注入输入的系统要求
 
@@ -161,6 +163,8 @@ WeChat and your PC has internet, it works from anywhere.
 - **History popup** — Fluent-style rounded popup from a tray click: copy on click,
   delete via right-click, auto-close on focus loss
 - **Pause injection** — messages are recorded but not typed, nothing is lost
+- **Auto-Enter** — after each message is typed, an extra Enter is pressed to send
+  it right away in chat apps (tray-menu toggle, remembered across restarts)
 - **Persistent login** — token is stored locally; reconnects automatically after reboot
 - **Autostart** — register a scheduled task from the tray menu
 - **Health watchdog** — turns yellow on connection issues or long message silence
@@ -189,12 +193,15 @@ Data (token, history, logs) lives in `%LOCALAPPDATA%\AirType\`; override with `-
 
 - **Left-click the tray**: shows the QR window when red; otherwise toggles the history popup
 - **History popup**: click an entry to copy it, right-click for copy / delete, closes on focus loss
-- **Right-click menu**: pause / rescan QR / log out / clear history / open log / autostart / exit
+- **Right-click menu**: pause / auto-enter / rescan QR / log out / clear history / open log / autostart / exit
 
 ## ⚠️ Notes
 
 - **Newlines become Enter presses** — in send-on-Enter inputs (e.g. WeChat desktop
   chats), a multi-line message will be sent line by line
+- **Auto-Enter means auto-send** — with Auto-Enter enabled, every message gets a
+  final Enter press: in chat apps that sends it. Keep your focus out of windows
+  you don't want to post into
 - **Receive-only** — AirType never replies or sends messages on your behalf
 - **Admin rights required** — a system requirement for injecting input into any window
 

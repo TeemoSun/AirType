@@ -23,6 +23,7 @@ import (
 	"github.com/TeemoSun/AirType/internal/bot"
 	"github.com/TeemoSun/AirType/internal/history"
 	"github.com/TeemoSun/AirType/internal/paths"
+	"github.com/TeemoSun/AirType/internal/settings"
 	"github.com/TeemoSun/AirType/internal/typer"
 	"github.com/TeemoSun/AirType/internal/ui"
 	"github.com/TeemoSun/AirType/internal/win"
@@ -85,15 +86,26 @@ func run(dataDir string) int {
 	a.appCtx, a.appCancel = context.WithCancel(context.Background())
 	a.paused.Store(false)
 
+	// 用户偏好（settings.json）；加载失败不阻断启动，用默认值
+	prefs, err := settings.Load(dir)
+	if err != nil {
+		logger.Warn("加载设置失败，使用默认值", "err", err)
+	}
+	a.autoEnter.Store(prefs.AutoEnter)
+
 	tray, err := ui.NewTray(ui.Config{
-		Logger:       logger,
-		History:      hist,
-		InjectText:   a.inject,
-		TogglePause:  a.togglePause,
-		Rescan:       a.rescan,
-		Logout:       a.logout,
-		OpenLog:      func() { openExplorerSelect(filepath.Join(dir, "airtype.log")) },
-		AutostartSet: autostart.Set,
+		Logger:      logger,
+		History:     hist,
+		InjectText:  a.inject,
+		TogglePause: a.togglePause,
+		AutoEnterEnabled: func() bool {
+			return a.autoEnter.Load()
+		},
+		ToggleAutoEnter: a.toggleAutoEnter,
+		Rescan:          a.rescan,
+		Logout:          a.logout,
+		OpenLog:         func() { openExplorerSelect(filepath.Join(dir, "airtype.log")) },
+		AutostartSet:    autostart.Set,
 		AutostartEnabled: func() bool {
 			return autostart.Enabled()
 		},
@@ -132,6 +144,9 @@ type app struct {
 	tray   *ui.Tray
 	hist   *history.Store
 	paused atomic.Bool
+
+	// autoEnter：消息注入完成后自动补一次回车（发送）。持久化到 settings.json。
+	autoEnter atomic.Bool
 
 	appCtx    context.Context
 	appCancel context.CancelFunc
@@ -174,6 +189,18 @@ func (a *app) togglePause() bool {
 	p := a.paused.Load()
 	a.logger.Info("切换暂停", "paused", p)
 	return p
+}
+
+// toggleAutoEnter 切换"自动回车"并立即持久化，返回切换后的状态。
+func (a *app) toggleAutoEnter() bool {
+	v := !a.autoEnter.Load()
+	a.autoEnter.Store(v)
+	if err := settings.Save(a.dir, settings.Settings{AutoEnter: v}); err != nil {
+		// 持久化失败只记日志：本次会话开关仍生效，重启后回退旧值
+		a.logger.Error("保存设置失败", "err", err)
+	}
+	a.logger.Info("切换自动回车", "enabled", v)
+	return v
 }
 
 func (a *app) startBot() error {
@@ -302,7 +329,16 @@ func (a *app) inject(text string) error {
 		a.tray.NotifyError("AirType", "注入失败："+err.Error())
 		return err
 	}
+	// 自动回车：文字已在输入框里，再补一次回车把消息发送出去。
+	// 失败只记日志（文字本体已注入，用户手按一次回车即可补救）。
+	if a.autoEnter.Load() {
+		if err := typer.PressEnter(); err != nil {
+			a.logger.Error("自动回车失败", "err", err, "fgWindow", fgTitle, "fgProc", fgExe)
+			return err
+		}
+	}
 	a.logger.Info("注入完成", "chars", len([]rune(text)),
+		"autoEnter", a.autoEnter.Load(),
 		"injectCost", time.Since(start).Round(time.Millisecond),
 		"fgWindow", fgTitle, "fgProc", fgExe)
 	return nil

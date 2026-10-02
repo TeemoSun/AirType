@@ -1,14 +1,16 @@
 //go:build windows
 
 // traytest 在不接入微信、不需要管理员权限的情况下验证托盘与历史弹窗 UI：
-// 循环切换状态；并演练"焦点记忆→弹窗→重注入"链路（配合 typetest-target 靶子窗口）。
+// 循环切换状态；并演练弹窗开关、剪贴板复制、自动回车菜单开关链路。
 //
 // 时间线：
-//   t=1s   NeedQR + 二维码窗口
-//   t=6s   Connected；写入 3 条假历史
-//   t=8s   激活 typetest-target（若在运行）
-//   t=9s   打开历史弹窗（此刻捕获靶子窗口焦点快照）
-//   t=12s  重注入第 0 条 → 弹窗收起 → 焦点还原到靶子 → 文字注入靶子
+//
+//	t=1s   NeedQR + 二维码窗口
+//	t=6s   Connected；写入 3 条假历史
+//	t=8s   激活 typetest-target（若在运行）
+//	t=9s   打开历史弹窗（此刻捕获靶子窗口焦点快照）
+//	t=12s  关闭→二次打开→可见性断言（闪关/死锁回归）
+//	t=14s  剪贴板复制回读验证；自动回车菜单开关链路验证
 package main
 
 import (
@@ -16,14 +18,17 @@ import (
 	"os"
 	"time"
 
-	"github.com/lxn/walk"
 	"github.com/TeemoSun/AirType/internal/history"
 	"github.com/TeemoSun/AirType/internal/typer"
 	"github.com/TeemoSun/AirType/internal/ui"
 	"github.com/TeemoSun/AirType/internal/win"
+	"github.com/lxn/walk"
 )
 
 const targetTitle = "AirType Typetest Target"
+
+// autoEnterEnabled 模拟业务层开关状态（回调都在 UI 线程执行，无需加锁）。
+var autoEnterEnabled = false
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -42,9 +47,15 @@ func main() {
 			logger.Info("TogglePause 被调用")
 			return time.Now().Second()%2 == 0
 		},
-		Rescan:  func() { logger.Info("Rescan 被调用") },
-		Logout:  func() { logger.Info("Logout 被调用") },
-		OpenLog: func() { logger.Info("OpenLog 被调用") },
+		AutoEnterEnabled: func() bool { return autoEnterEnabled },
+		ToggleAutoEnter: func() bool {
+			autoEnterEnabled = !autoEnterEnabled
+			logger.Info("ToggleAutoEnter 被调用", "enabled", autoEnterEnabled)
+			return autoEnterEnabled
+		},
+		Rescan:           func() { logger.Info("Rescan 被调用") },
+		Logout:           func() { logger.Info("Logout 被调用") },
+		OpenLog:          func() { logger.Info("OpenLog 被调用") },
 		AutostartEnabled: func() bool { return false },
 		AutostartSet:     func(bool) error { return nil },
 	})
@@ -110,6 +121,21 @@ func scenario(logger *slog.Logger, tray *ui.Tray, hist *history.Store) {
 	} else {
 		logger.Info("剪贴板回读一致 ✓")
 	}
+
+	// 阶段 6："自动回车"菜单开关链路（初始态 → 切换 → 勾选态刷新）
+	if c := tray.AutoEnterCheckedForTest(); c {
+		logger.Error("自动回车初始勾选应为 false", "got", c)
+	} else {
+		logger.Info("自动回车初始态 false ✓")
+	}
+	tray.TriggerAutoEnterForTest()
+	time.Sleep(300 * time.Millisecond)
+	if c := tray.AutoEnterCheckedForTest(); !c {
+		logger.Error("切换后勾选应为 true", "got", c)
+	} else {
+		logger.Info("自动回车切换链路 ✓（菜单→回调→勾选态）")
+	}
+
 	logger.Info("全部测试序列执行完毕")
 }
 

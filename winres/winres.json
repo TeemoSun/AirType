@@ -1,8 +1,13 @@
 {
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": "icon.png"
+    }
+  },
   "RT_MANIFEST": {
     "#1": {
       "0409": {
-        "description": "AirType 隔空打字",
+        "description": "AirType 工具（as-invoker）",
         "minimum-os": "win7",
         "execution-level": "",
         "dpi-awareness": "per monitor v2",

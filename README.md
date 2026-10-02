@@ -96,7 +96,7 @@ go build -o build/ ./cmd/...     # 全部二进制（含测试工具）
 | 消息通道 | 微信 iLink 协议（`ilinkai.weixin.qq.com`）长轮询，端到端约 0.5~2 秒 |
 | 键盘注入 | `SendInput` + `KEYEVENTF_UNICODE`，UTF-16 代理对完整支持 Emoji，换行折叠为回车 |
 | 界面 | `lxn/walk` 原生 Win32 控件 + 自绘列表，Win11 DWM 圆角无边框弹窗 |
-| 稳定性 | 单实例互斥锁、注入分批提交、看门狗健康检测、退出 2 秒兜底超时 |
+| 稳定性 | 单实例互斥锁、注入分批提交、看门狗健康检测、退出 2 秒兜底超时、托盘图标守护（任务栏重建/二次启动自动重挂） |
 | 构建 | `CGO_ENABLED=0` 静态编译单文件，`.syso` 资源直接进 Git，CI 全平台校验 |
 
 完整设计文档见 [docs/开发方案.md](docs/开发方案.md)。
@@ -230,7 +230,7 @@ go build -o build/ ./cmd/...     # all binaries (incl. test tools)
 | Message channel | WeChat iLink protocol (`ilinkai.weixin.qq.com`) long polling, ~0.5–2s end-to-end |
 | Keyboard injection | `SendInput` + `KEYEVENTF_UNICODE` with full UTF-16 surrogate-pair emoji support, newline→Enter folding |
 | UI | `lxn/walk` native Win32 controls + custom-drawn list, Win11 DWM rounded borderless popup |
-| Robustness | single-instance mutex, batched input submission, health watchdog, 2s shutdown timeout |
+| Robustness | single-instance mutex, batched input submission, health watchdog, 2s shutdown timeout, tray-icon guard (auto re-add on taskbar restart / second launch) |
 | Build | `CGO_ENABLED=0` static single binary, `.syso` resources committed, CI on every push |
 
 Full design docs (in Chinese): [docs/开发方案.md](docs/开发方案.md).

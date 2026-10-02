@@ -114,9 +114,22 @@ func NewTray(cfg Config) (*Tray, error) {
 	_ = ni.SetVisible(true)
 
 	t.buildMenu()
+	t.attachTrayClick()
 
+	// 托盘守护：walk 在 TaskbarCreated 后只以隐藏态重挂图标（实际仍不可见），
+	// 且没有 NIM_ADD 级的公开恢复接口，图标一旦从托盘丢失便找不回来。
+	// 这里子类化主窗口：任务栏重建或二次实例唤醒广播时，销毁重建图标。
+	if err := win.SubclassTrayGuard(uintptr(t.mw.Handle()), t.onTaskbarRecreated, t.onWakeFromSecondInstance); err != nil {
+		t.cfg.Logger.Warn("安装托盘守护失败（不影响其余功能）", "err", err)
+	}
+
+	return t, nil
+}
+
+// attachTrayClick 挂接托盘左键单击行为（图标重建后需对新图标重挂）。
+func (t *Tray) attachTrayClick() {
 	// 左键单击：待扫码时弹出二维码窗口；有历史时弹窗做开关切换；否则气泡摘要
-	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+	t.ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if button != walk.LeftButton {
 			return
 		}
@@ -135,10 +148,46 @@ func NewTray(cfg Config) (*Tray, error) {
 			t.ShowHistory()
 			return
 		}
-		_ = ni.ShowInfo("AirType", t.StatusText())
+		_ = t.ni.ShowInfo("AirType", t.StatusText())
 	})
+}
 
-	return t, nil
+// onTaskbarRecreated 处理任务栏重建（explorer 重启等）：walk 已把自己那份
+// 隐藏态图标挂回（发生在原窗口过程里），这里销毁重建为正常可见图标。
+func (t *Tray) onTaskbarRecreated() {
+	t.recreateNotifyIcon()
+	t.cfg.Logger.Info("检测到任务栏重建，托盘图标已重建")
+}
+
+// onWakeFromSecondInstance 处理二次实例的唤醒广播：重建图标并明确告知用户。
+func (t *Tray) onWakeFromSecondInstance() {
+	t.recreateNotifyIcon()
+	_ = t.ni.ShowInfo("AirType", "AirType 已在运行；托盘图标已重新显示（本次启动已忽略）")
+	t.cfg.Logger.Info("二次实例唤醒：托盘图标已重建")
+}
+
+// recreateNotifyIcon 销毁并重建托盘图标。walk 的 SetVisible 走 NIM_MODIFY，
+// 救不回已从托盘丢失的图标；新建 NotifyIcon 走 NIM_ADD 才是真正的重挂，
+// 随后重建菜单、图标与点击处理。必须在 UI 线程调用。
+func (t *Tray) recreateNotifyIcon() {
+	if t.ni != nil {
+		_ = t.ni.SetVisible(false)
+		_ = t.ni.Dispose()
+	}
+	ni, err := walk.NewNotifyIcon(t.mw)
+	if err != nil {
+		t.cfg.Logger.Error("重建托盘图标失败", "err", err)
+		return
+	}
+	t.ni = ni
+	t.buildMenu()
+	if err := t.applyIcon(); err != nil {
+		t.cfg.Logger.Error("重建后设置图标失败", "err", err)
+	}
+	_ = t.ni.SetToolTip(t.StatusText())
+	_ = t.ni.SetVisible(true)
+	t.attachTrayClick()
+	t.SetPaused(t.paused) // 重建菜单后恢复"暂停注入/恢复注入"文案
 }
 
 func (t *Tray) buildMenu() {
@@ -411,6 +460,28 @@ func (t *Tray) AutoEnterCheckedForTest() bool {
 // TriggerAutoEnterForTest 模拟点击"自动回车"菜单项（走完整切换回调链）。线程安全。
 func (t *Tray) TriggerAutoEnterForTest() {
 	t.mw.Synchronize(t.toggleAutoEnterMenu)
+}
+
+// TrayIconVisibleForTest 返回托盘图标当前可见态（供守护链路测试）。线程安全。
+func (t *Tray) TrayIconVisibleForTest() bool {
+	done := make(chan bool, 1)
+	t.mw.Synchronize(func() {
+		done <- t.ni != nil && t.ni.Visible()
+	})
+	select {
+	case v := <-done:
+		return v
+	case <-time.After(2 * time.Second):
+		return false
+	}
+}
+
+// SimulateTaskbarRestartForTest 向托盘主窗口投递 TaskbarCreated，
+// 模拟 explorer/任务栏重建（走真实子类化链路）。线程安全。
+func (t *Tray) SimulateTaskbarRestartForTest() {
+	t.mw.Synchronize(func() {
+		win.PostTaskbarCreatedForTest(uintptr(t.mw.Handle()))
+	})
 }
 
 // ShowQR 显示扫码二维码窗口（线程安全）。imageURL 为二维码内容链接。

@@ -136,6 +136,34 @@ func scenario(logger *slog.Logger, tray *ui.Tray, hist *history.Store) {
 		logger.Info("自动回车切换链路 ✓（菜单→回调→勾选态）")
 	}
 
+	// 阶段 7：托盘守护 —— 模拟任务栏重建与二次实例唤醒广播
+	if v := tray.TrayIconVisibleForTest(); !v {
+		logger.Error("初始托盘图标应可见", "visible", v)
+	}
+	tray.SimulateTaskbarRestartForTest()
+	time.Sleep(500 * time.Millisecond)
+	if v := tray.TrayIconVisibleForTest(); !v {
+		logger.Error("任务栏重建后图标应可见（重建链路）", "visible", v)
+	} else {
+		logger.Info("任务栏重建→图标重建 ✓")
+	}
+	// 重建后菜单可用性：自动回车应能继续切换（菜单已被重建过一次）
+	tray.TriggerAutoEnterForTest()
+	time.Sleep(300 * time.Millisecond)
+	if c := tray.AutoEnterCheckedForTest(); c {
+		logger.Error("重建后自动回车切换异常", "checked", c)
+	} else {
+		logger.Info("重建后菜单可用 ✓（自动回车切换正常）")
+	}
+	// 二次实例唤醒广播（真实链路：HWND_BROADCAST → 子类化窗口过程）
+	win.WakeRunningInstance()
+	time.Sleep(500 * time.Millisecond)
+	if v := tray.TrayIconVisibleForTest(); !v {
+		logger.Error("唤醒广播后图标应可见", "visible", v)
+	} else {
+		logger.Info("二次实例唤醒→图标重建+气泡提示 ✓")
+	}
+
 	logger.Info("全部测试序列执行完毕")
 }
 

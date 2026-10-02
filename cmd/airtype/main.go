@@ -68,7 +68,10 @@ func run(dataDir string) int {
 
 	if err := win.AcquireSingleInstance("AirType"); err != nil {
 		logger.Error("单实例检查失败", "err", err)
-		return 0 // 已有实例在跑，安静退出
+		// 唤醒已在运行的实例：重建托盘图标并弹提示。
+		// 之前"安静退出"会让用户误以为没启动（尤其图标意外丢失时），双击反而成了找回图标的手势。
+		win.WakeRunningInstance()
+		return 0 // 已有实例在跑，本进程退出
 	}
 
 	hist, err := history.Open(filepath.Join(dir, "history.json"), 500)

@@ -205,13 +205,37 @@ func (p *historyPopup) reload() {
 	p.list.setItems(entries)
 }
 
-// copyAt 复制指定条目并气泡确认。
-func (p *historyPopup) copyAt(i int) {
-	entries := p.tray.cfg.History.All()
-	if i < 0 || i >= len(entries) {
+// copyAt 按条目 ID 复制文本到剪贴板（列表索引可能因新消息插入而漂移，
+// 必须用 ID 定位）。剪贴板锁常被输入法/剪贴板工具短暂占用，
+// walk.Clipboard().SetText 单次失败即返回——重试后再报错；
+// 失败如实弹错误气泡，成功才提示已复制。
+func (p *historyPopup) copyAt(id int64) {
+	var text string
+	found := false
+	for _, e := range p.tray.cfg.History.All() {
+		if e.ID == id {
+			text, found = e.Text, true
+			break
+		}
+	}
+	if !found {
+		p.tray.cfg.Logger.Warn("复制目标不存在", "id", id)
 		return
 	}
-	p.tray.copyToClipboard(entries[i].Text)
+
+	var err error
+	for i := 0; i < 10; i++ {
+		if err = walk.Clipboard().SetText(text); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		p.tray.cfg.Logger.Error("复制失败", "err", err)
+		_ = p.tray.ni.ShowError("AirType", "复制失败："+err.Error())
+		return
+	}
+	p.tray.cfg.Logger.Info("已复制", "chars", len([]rune(text)))
 	_ = p.tray.ni.ShowInfo("AirType", "已复制到剪贴板")
 }
 
@@ -438,21 +462,22 @@ func (fl *fluentList) onMouseWheel(x, y int, button walk.MouseButton) {
 
 func (fl *fluentList) onMouseDown(x, y int, button walk.MouseButton) {
 	idx := fl.hitTest(x, y)
-	if idx < 0 {
+	if idx < 0 || idx >= len(fl.items) {
 		return
 	}
+	id := fl.items[idx].id
 	if button == walk.LeftButton {
-		fl.p.copyAt(idx)
+		fl.p.copyAt(id)
 		return
 	}
 	if button == walk.RightButton {
 		choice := win.ShowContextMenu(uintptr(fl.p.win.Handle()), []string{"复制", "删除"})
 		switch choice {
 		case 0:
-			fl.p.copyAt(idx)
+			fl.p.copyAt(id)
 		case 1:
 			if fl.p.tray.cfg.History != nil {
-				fl.p.tray.cfg.History.Delete(fl.items[idx].id)
+				fl.p.tray.cfg.History.Delete(id)
 				fl.p.reload()
 			}
 		}

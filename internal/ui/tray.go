@@ -326,10 +326,17 @@ func (t *Tray) PopupIsShownForTest() bool {
 	}
 }
 
-// copyToClipboard 复制文本到剪贴板（线程安全）。
-func (t *Tray) copyToClipboard(text string) {
+// PopupCopyForTest 复制弹窗第 i 条（模拟单击条目），供剪贴板回读验证。线程安全。
+func (t *Tray) PopupCopyForTest(i int) {
 	t.mw.Synchronize(func() {
-		_ = walk.Clipboard().SetText(text)
+		if t.popup == nil || t.popup.list == nil {
+			return
+		}
+		items := t.popup.list.items
+		if i < 0 || i >= len(items) {
+			return
+		}
+		t.popup.copyAt(items[i].id)
 	})
 }
 

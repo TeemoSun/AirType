@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/lxn/walk"
 	"github.com/TeemoSun/AirType/internal/history"
 	"github.com/TeemoSun/AirType/internal/typer"
 	"github.com/TeemoSun/AirType/internal/ui"
@@ -95,7 +96,20 @@ func scenario(logger *slog.Logger, tray *ui.Tray, hist *history.Store) {
 	time.Sleep(3 * time.Second)
 	logger.Info("二次打开3秒后", "visible", tray.PopupIsShownForTest(), "flag", tray.PopupVisible())
 	callWithWatchdog(logger, func() { tray.SetLastReceived(time.Now()) }, "模拟收信(SetLastReceived)")
-	logger.Info("死锁/闪关复现序列执行完毕")
+
+	// 阶段 5：剪贴板复制回读验证（模拟单击第 0 条）
+	time.Sleep(500 * time.Millisecond)
+	tray.PopupCopyForTest(0)
+	time.Sleep(500 * time.Millisecond)
+	got, err := walk.Clipboard().Text()
+	if err != nil {
+		logger.Error("剪贴板回读失败", "err", err)
+	} else if got != "收到，我马上过去 😀" {
+		logger.Error("剪贴板内容不符", "got", got)
+	} else {
+		logger.Info("剪贴板回读一致 ✓")
+	}
+	logger.Info("全部测试序列执行完毕")
 }
 
 // callWithWatchdog 执行 fn，若 3 秒未返回则记录死锁嫌疑并放弃等待。

@@ -65,6 +65,7 @@ type historyPopup struct {
 	tray      *Tray
 	win       *walk.MainWindow
 	list      *fluentList
+	closeBtn  *closeButton
 	snapshot  win.FocusSnapshot
 	shownAt   time.Time
 	statusLbl *walk.Label
@@ -76,8 +77,8 @@ func (t *Tray) ensureHistoryPopup() {
 	}
 	p := &historyPopup{tray: t}
 	var w *walk.MainWindow
-	var status, closeBtn *walk.Label
-	var listHost *walk.Composite
+	var status *walk.Label
+	var listHost, closeHost *walk.Composite
 
 	err := MainWindow{
 		AssignTo:   &w,
@@ -99,7 +100,7 @@ func (t *Tray) ensureHistoryPopup() {
 					Label{Text: "隔空打字", Font: Font{Family: "Segoe UI", PointSize: 15, Bold: true}},
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					HSpacer{},
-					Label{AssignTo: &closeBtn, Text: "✕", TextColor: colTextGray},
+					Composite{AssignTo: &closeHost, MinSize: Size{Width: 36, Height: 36}},
 				},
 			},
 			// 列表宿主：自绘 Fluent 列表挂到这里
@@ -126,13 +127,6 @@ func (t *Tray) ensureHistoryPopup() {
 	p.win = w
 	p.statusLbl = status
 
-	// 关闭按钮
-	closeBtn.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
-		if button == walk.LeftButton {
-			p.hide()
-		}
-	})
-
 	// 无边框 + 圆角（Win11 风格浮层）
 	win.MakeTopmostToolWindow(uintptr(w.Handle()))
 	win.MakeBorderlessRoundedPopup(uintptr(w.Handle()))
@@ -143,6 +137,11 @@ func (t *Tray) ensureHistoryPopup() {
 		return
 	}
 	p.list = fl
+
+	// ✕ 关闭按钮：自绘（walk Label 是 STATIC 控件收不到点击，不能用）
+	cb := newCloseButton(closeHost, p)
+	p.closeBtn = cb
+
 	t.popup = p
 }
 
@@ -216,14 +215,17 @@ func (p *historyPopup) copyAt(i int) {
 	_ = p.tray.ni.ShowInfo("AirType", "已复制到剪贴板")
 }
 
-// watchFocusLoss 失焦自动关闭：
-//  - 弹窗曾获得过前台 → 失去前台即关闭；
-//  - 上下文菜单（#32768）持有前台时不算失焦；
-//  - 前台仍是打开前那个窗口时保持显示（激活被回退的竞态宽限）。
+// watchFocusLoss 失焦自动关闭（带回退容错）：
+//  - 弹窗曾获得前台 → 失去前台即关闭候选；但若前台回到打开前的窗口且
+//    距激活不足 1.2s，视为系统前台权限瞬时回退（托盘点击的激活权很短），
+//    不关闭——否则弹窗闪关，表现为"打不开"；
+//  - 切到任何第三方窗口 → 立即关闭；
+//  - 上下文菜单（#32768）持有前台时不算失焦。
 func (p *historyPopup) watchFocusLoss() {
 	popupHwnd := uintptr(p.win.Handle())
 	preFg := uintptr(p.snapshot.Foreground)
 	wasActivated := false
+	var activatedAt time.Time
 	for range time.Tick(250 * time.Millisecond) {
 		if !p.win.Visible() {
 			return
@@ -231,16 +233,75 @@ func (p *historyPopup) watchFocusLoss() {
 		fg := uintptr(win.Foreground())
 		if fg == popupHwnd {
 			wasActivated = true
+			activatedAt = time.Now()
 			continue
 		}
 		if win.ForegroundClassName() == "#32768" {
 			continue
 		}
-		if wasActivated || (fg != 0 && fg != preFg) {
+		if fg == preFg {
+			// 激活后 1.2s 内回到原窗口：系统回退，保持弹窗
+			if wasActivated && time.Since(activatedAt) > 1200*time.Millisecond {
+				p.tray.mw.Synchronize(func() { p.hide() })
+				return
+			}
+			continue
+		}
+		if fg != 0 {
 			p.tray.mw.Synchronize(func() { p.hide() })
 			return
 		}
 	}
+}
+
+// closeButton 是自绘的 ✕ 关闭按钮（36×36，悬停淡红高亮）。
+// walk 的 Label 是 STATIC 控件、收不到鼠标事件，故必须自绘。
+type closeButton struct {
+	w     *walk.CustomWidget
+	p     *historyPopup
+	hover bool
+	fnt   *walk.Font
+	br    *walk.SolidColorBrush
+}
+
+func newCloseButton(parent walk.Container, p *historyPopup) *closeButton {
+	cb := &closeButton{p: p}
+	var err error
+	if cb.fnt, err = walk.NewFont("Segoe UI", 9, 0); err != nil {
+		return nil
+	}
+	if cb.br, err = walk.NewSolidColorBrush(walk.RGB(250, 235, 235)); err != nil {
+		return nil
+	}
+	w, err := walk.NewCustomWidgetPixels(parent, 0, cb.paint)
+	if err != nil {
+		return nil
+	}
+	cb.w = w
+	w.MouseMove().Attach(func(x, y int, _ walk.MouseButton) {
+		if !cb.hover {
+			cb.hover = true
+			w.Invalidate()
+		}
+	})
+	w.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button == walk.LeftButton {
+			p.hide()
+		}
+	})
+	return cb
+}
+
+func (cb *closeButton) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
+	color := colTextGray
+	if cb.hover {
+		if err := canvas.FillRectanglePixels(cb.br, bounds); err != nil {
+			return err
+		}
+		color = walk.RGB(200, 40, 40)
+	}
+	return canvas.DrawTextPixels("✕", cb.fnt, color, bounds,
+		walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
 }
 
 // fluentItem 是列表条目。

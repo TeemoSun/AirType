@@ -303,6 +303,29 @@ func (t *Tray) PopupVisible() bool {
 	return t.popupVisible.Load()
 }
 
+// HidePopupForTest 收起历史弹窗（供自动化测试模拟点击 ✕）。线程安全。
+func (t *Tray) HidePopupForTest() {
+	t.mw.Synchronize(func() {
+		if t.popup != nil && t.popup.win.Visible() {
+			t.popup.hide()
+		}
+	})
+}
+
+// PopupIsShownForTest 返回弹窗窗口当前是否可见（供测试检测闪关）。
+func (t *Tray) PopupIsShownForTest() bool {
+	done := make(chan bool, 1)
+	t.mw.Synchronize(func() {
+		done <- t.popup != nil && t.popup.win.Visible()
+	})
+	select {
+	case v := <-done:
+		return v
+	case <-time.After(2 * time.Second):
+		return false
+	}
+}
+
 // copyToClipboard 复制文本到剪贴板（线程安全）。
 func (t *Tray) copyToClipboard(text string) {
 	t.mw.Synchronize(func() {

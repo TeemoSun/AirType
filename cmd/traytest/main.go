@@ -86,6 +86,30 @@ func scenario(logger *slog.Logger, tray *ui.Tray, hist *history.Store) {
 	tray.ShowHistory()
 	logger.Info("历史弹窗已打开（焦点快照已捕获）")
 
-	// 阶段 4：弹窗保持打开（重发功能已移除，仅验证展示与交互入口）
-	select {}
+	// 阶段 4：复现用户报告 —— 打开 → 关闭(✕) → 再打开 → 检查是否闪关/标志卡死
+	time.Sleep(2 * time.Second)
+	callWithWatchdog(logger, tray.HidePopupForTest, "关闭弹窗(✕)")
+	logger.Info("关闭后弹窗可见", "visible", tray.PopupIsShownForTest(), "flag", tray.PopupVisible())
+	time.Sleep(1 * time.Second)
+	callWithWatchdog(logger, tray.ShowHistory, "第二次打开弹窗")
+	time.Sleep(3 * time.Second)
+	logger.Info("二次打开3秒后", "visible", tray.PopupIsShownForTest(), "flag", tray.PopupVisible())
+	callWithWatchdog(logger, func() { tray.SetLastReceived(time.Now()) }, "模拟收信(SetLastReceived)")
+	logger.Info("死锁/闪关复现序列执行完毕")
+}
+
+// callWithWatchdog 执行 fn，若 3 秒未返回则记录死锁嫌疑并放弃等待。
+func callWithWatchdog(logger *slog.Logger, fn func(), name string) {
+	done := make(chan struct{})
+	go func() {
+		start := time.Now()
+		fn()
+		logger.Info("步骤完成", "name", name, "cost", time.Since(start).Round(time.Millisecond))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		logger.Error("步骤超时 —— UI 线程疑似死锁", "name", name)
+	}
 }

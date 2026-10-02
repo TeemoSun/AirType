@@ -191,7 +191,12 @@ func (a *app) stopBot() {
 	defer a.mu.Unlock()
 	if a.runCancel != nil {
 		a.runCancel()
-		<-a.runDone
+		// 兜底：SDK 长轮询退出偶发迟滞，2 秒后放弃等待，避免退出挂死
+		select {
+		case <-a.runDone:
+		case <-time.After(2 * time.Second):
+			a.logger.Warn("bot 未在 2 秒内退出，放弃等待（进程仍将退出）")
+		}
 		a.runCancel = nil
 		a.runDone = nil
 	}

@@ -14,6 +14,9 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"github.com/skip2/go-qrcode"
+
+	"github.com/TeemoSun/AirType/internal/history"
+	"github.com/TeemoSun/AirType/internal/win"
 )
 
 // TrayState 是托盘显示的连接状态（与 bot.State 解耦）。
@@ -42,6 +45,11 @@ func (s TrayState) String() string {
 type Config struct {
 	Logger *slog.Logger
 
+	// History 为历史存储；为 nil 时左键单击与"清空历史"菜单不可用。
+	History *history.Store
+	// InjectText 把文本注入当前前台窗口（重发/新消息共用）。
+	InjectText func(text string) error
+
 	// TogglePause 切换暂停注入，返回切换后的暂停状态。
 	TogglePause func() bool
 	// Rescan 重新扫码（停 bot、删 token、重启）。
@@ -55,9 +63,10 @@ type Config struct {
 
 // Tray 持有托盘 UI。所有公开方法线程安全（内部 marshal 到 UI 线程）。
 type Tray struct {
-	cfg Config
-	mw  *walk.MainWindow
-	ni  *walk.NotifyIcon
+	cfg    Config
+	mw     *walk.MainWindow
+	ni     *walk.NotifyIcon
+	popup  *historyPopup
 
 	pauseAction  *walk.Action
 	state        TrayState
@@ -94,7 +103,7 @@ func NewTray(cfg Config) (*Tray, error) {
 
 	t.buildMenu()
 
-	// 左键单击：待扫码时弹出二维码窗口，否则气泡显示当前状态摘要
+	// 左键单击：待扫码时弹出二维码窗口；有历史时弹历史弹窗；否则气泡摘要
 	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if button != walk.LeftButton {
 			return
@@ -103,6 +112,10 @@ func NewTray(cfg Config) (*Tray, error) {
 			if t.qrWin != nil && t.qrShown {
 				t.qrWin.Show()
 			}
+			return
+		}
+		if t.cfg.History != nil {
+			t.ShowHistory()
 			return
 		}
 		_ = ni.ShowInfo("AirType", t.StatusText())
@@ -142,6 +155,17 @@ func (t *Tray) buildMenu() {
 		}
 	})
 	menu.Actions().Add(openLog)
+
+	clearHist := walk.NewAction()
+	clearHist.SetText("清空历史")
+	clearHist.Triggered().Attach(func() {
+		if t.cfg.History == nil {
+			return
+		}
+		t.cfg.History.Clear()
+		_ = t.ni.ShowInfo("AirType", "历史已清空")
+	})
+	menu.Actions().Add(clearHist)
 
 	autostart := walk.NewAction()
 	autostart.SetText("开机自启")
@@ -229,6 +253,46 @@ func (t *Tray) StatusText() string {
 func (t *Tray) NotifyError(title, info string) {
 	t.mw.Synchronize(func() {
 		_ = t.ni.ShowError(title, info)
+	})
+}
+
+// ShowHistory 打开历史弹窗：先捕获当前焦点快照（方案 §4.2），再显示弹窗。
+func (t *Tray) ShowHistory() {
+	t.mw.Synchronize(func() {
+		if t.cfg.History == nil {
+			return
+		}
+		t.ensureHistoryPopup()
+		if t.popup == nil {
+			return
+		}
+		t.popup.snapshot = win.CaptureFocus()
+		t.popup.show()
+	})
+}
+
+// PopupReinject 重注入第 i 条历史（与用户单击条目等价；供自动化测试）。线程安全。
+func (t *Tray) PopupReinject(i int) {
+	t.mw.Synchronize(func() {
+		if t.popup != nil && t.popup.win.Visible() {
+			t.popup.reinject(i)
+		}
+	})
+}
+
+// HistoryChanged 历史变更通知（弹窗打开时刷新列表）。线程安全。
+func (t *Tray) HistoryChanged() {
+	t.mw.Synchronize(func() {
+		if t.popup != nil && t.popup.win.Visible() {
+			t.popup.reload()
+		}
+	})
+}
+
+// copyToClipboard 复制文本到剪贴板（线程安全）。
+func (t *Tray) copyToClipboard(text string) {
+	t.mw.Synchronize(func() {
+		_ = walk.Clipboard().SetText(text)
 	})
 }
 

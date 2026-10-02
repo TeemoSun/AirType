@@ -20,6 +20,7 @@ import (
 	"github.com/TeemoSun/AirType/internal/applog"
 	"github.com/TeemoSun/AirType/internal/autostart"
 	"github.com/TeemoSun/AirType/internal/bot"
+	"github.com/TeemoSun/AirType/internal/history"
 	"github.com/TeemoSun/AirType/internal/paths"
 	"github.com/TeemoSun/AirType/internal/typer"
 	"github.com/TeemoSun/AirType/internal/ui"
@@ -68,15 +69,25 @@ func run(dataDir string) int {
 		return 0 // 已有实例在跑，安静退出
 	}
 
+	hist, err := history.Open(filepath.Join(dir, "history.json"), 500)
+	if err != nil {
+		logger.Error("打开历史存储失败", "err", err)
+		return 1
+	}
+	defer func() { _ = hist.Close() }()
+
 	a := &app{
 		dir:    dir,
 		logger: logger,
+		hist:   hist,
 	}
 	a.appCtx, a.appCancel = context.WithCancel(context.Background())
 	a.paused.Store(false)
 
 	tray, err := ui.NewTray(ui.Config{
 		Logger:       logger,
+		History:      hist,
+		InjectText:   a.inject,
 		TogglePause:  a.togglePause,
 		Rescan:       a.rescan,
 		OpenLog:      func() { openExplorerSelect(filepath.Join(dir, "airtype.log")) },
@@ -90,6 +101,7 @@ func run(dataDir string) int {
 		return 1
 	}
 	a.tray = tray
+	hist.OnChange(tray.HistoryChanged)
 
 	logger.Info("AirType 启动", "version", version, "datadir", dir)
 
@@ -113,6 +125,7 @@ type app struct {
 	dir    string
 	logger *slog.Logger
 	tray   *ui.Tray
+	hist   *history.Store
 	paused atomic.Bool
 
 	appCtx    context.Context
@@ -204,10 +217,16 @@ func (a *app) rescan() {
 func (a *app) onText(text string) error {
 	received := time.Now()
 	a.tray.SetLastReceived(received)
+	a.hist.Add(text) // 暂停时也记录：消息不丢，事后可从历史弹窗补发
 	if a.paused.Load() {
-		a.logger.Info("已暂停，跳过注入", "chars", len([]rune(text)))
+		a.logger.Info("已暂停，只记录不注入", "chars", len([]rune(text)))
 		return nil
 	}
+	return a.inject(text)
+}
+
+// inject 注入当前前台窗口，失败时气泡提示。
+func (a *app) inject(text string) error {
 	start := time.Now()
 	if err := typer.Type(text); err != nil {
 		a.logger.Error("注入失败", "err", err)

@@ -127,7 +127,7 @@ func (t *Tray) ensureHistoryPopup() {
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					HSpacer{},
 					Label{
-						Text:      "单击重发 · 右键复制/删除",
+						Text:      "单击复制 · 右键重发/删除",
 						TextColor: colTextGray,
 					},
 				},
@@ -165,9 +165,9 @@ func (t *Tray) ensureHistoryPopup() {
 	p.tv = tv
 	p.statusLbl = status
 	win.MakeTopmostToolWindow(uintptr(w.Handle()))
-	// 双击 / 回车 = 重发（打回打开弹窗前的输入框）
+	// 双击 / 回车与单击一致：复制（重发只在右键菜单，避免误触发）
 	tv.ItemActivated().Attach(func() {
-		p.reinjectCurrent()
+		p.copyCurrent()
 	})
 	t.popup = p
 }
@@ -182,7 +182,7 @@ func (p *historyPopup) styleCell(style *walk.CellStyle) {
 	}
 }
 
-// onMouseDown：左键单击条目 → 重发（还原焦点后注入）；右键 → 选中该行。
+// onMouseDown：左键单击条目 → 复制；右键 → 选中该行（供上下文菜单）。
 func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
 	idx := p.tv.IndexAt(x, y)
 	if idx < 0 {
@@ -193,7 +193,7 @@ func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
 		return
 	}
 	if button == walk.LeftButton {
-		p.reinject(idx)
+		p.copyAt(idx)
 	}
 }
 

@@ -80,6 +80,7 @@ type Tray struct {
 
 	pauseAction  *walk.Action
 	autoEnter    *walk.Action
+	autoEnterOn  bool
 	state        TrayState
 	paused       bool
 	lastReceived time.Time
@@ -155,11 +156,8 @@ func (t *Tray) buildMenu() {
 	t.pauseAction = pause
 
 	autoEnter := walk.NewAction()
-	autoEnter.SetText("自动回车")
-	autoEnter.SetCheckable(true)
-	if t.cfg.AutoEnterEnabled != nil {
-		autoEnter.SetChecked(t.cfg.AutoEnterEnabled())
-	}
+	t.autoEnterOn = t.cfg.AutoEnterEnabled != nil && t.cfg.AutoEnterEnabled()
+	autoEnter.SetText(toggleText("自动回车", t.autoEnterOn))
 	autoEnter.Triggered().Attach(t.toggleAutoEnterMenu)
 	menu.Actions().Add(autoEnter)
 	t.autoEnter = autoEnter
@@ -203,22 +201,18 @@ func (t *Tray) buildMenu() {
 	menu.Actions().Add(clearHist)
 
 	autostart := walk.NewAction()
-	autostart.SetText("开机自启")
-	autostart.SetCheckable(true)
-	if t.cfg.AutostartEnabled != nil {
-		autostart.SetChecked(t.cfg.AutostartEnabled())
-	}
+	autostart.SetText(toggleText("开机自启", t.cfg.AutostartEnabled != nil && t.cfg.AutostartEnabled()))
 	autostart.Triggered().Attach(func() {
 		if t.cfg.AutostartSet == nil {
 			return
 		}
-		want := !autostart.Checked()
+		want := !(t.cfg.AutostartEnabled != nil && t.cfg.AutostartEnabled())
 		if err := t.cfg.AutostartSet(want); err != nil {
 			t.cfg.Logger.Error("设置开机自启失败", "want", want, "err", err)
 			_ = t.ni.ShowError("AirType", "设置开机自启失败："+err.Error())
 			return
 		}
-		autostart.SetChecked(want)
+		autostart.SetText(toggleText("开机自启", want))
 	})
 	menu.Actions().Add(autostart)
 
@@ -234,13 +228,24 @@ func (t *Tray) buildMenu() {
 	menu.Actions().Add(quit)
 }
 
+// toggleText 生成开关项的文字：开启时在标签右侧拼 ✓（全角空格对齐，
+// 两个开关项标签同为 4 个汉字，✓ 位置天然对齐）。
+// 不用原生勾选：任何一项可勾选都会让整个菜单左侧保留一个钩子列，难看。
+func toggleText(label string, on bool) string {
+	if on {
+		return label + "　　　✓"
+	}
+	return label
+}
+
 // toggleAutoEnterMenu 处理"自动回车"菜单点击：回调业务层切换，
-// 再以返回值刷新勾选态（菜单项本身不自持状态，避免与持久化设置漂移）。
+// 再以返回值刷新文字（开关态以业务回调返回值为准，避免与持久化设置漂移）。
 func (t *Tray) toggleAutoEnterMenu() {
 	if t.cfg.ToggleAutoEnter == nil {
 		return
 	}
-	_ = t.autoEnter.SetChecked(t.cfg.ToggleAutoEnter())
+	t.autoEnterOn = t.cfg.ToggleAutoEnter()
+	_ = t.autoEnter.SetText(toggleText("自动回车", t.autoEnterOn))
 }
 
 // Run 进入消息循环，阻塞至托盘退出。
@@ -389,11 +394,11 @@ func (t *Tray) PopupCopyForTest(i int) {
 	})
 }
 
-// AutoEnterCheckedForTest 返回"自动回车"菜单项勾选态（供自动化测试）。线程安全。
+// AutoEnterCheckedForTest 返回"自动回车"当前开关态（供自动化测试）。线程安全。
 func (t *Tray) AutoEnterCheckedForTest() bool {
 	done := make(chan bool, 1)
 	t.mw.Synchronize(func() {
-		done <- t.autoEnter != nil && t.autoEnter.Checked()
+		done <- t.autoEnter != nil && t.autoEnterOn
 	})
 	select {
 	case v := <-done:

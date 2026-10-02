@@ -234,11 +234,11 @@ func (p *historyPopup) copyAt(id int64) {
 }
 
 // watchFocusLoss 失焦自动关闭（带回退容错）：
-//  - 弹窗曾获得前台 → 失去前台即关闭候选；但若前台回到打开前的窗口且
-//    距激活不足 1.2s，视为系统前台权限瞬时回退（托盘点击的激活权很短），
-//    不关闭——否则弹窗闪关，表现为"打不开"；
-//  - 切到任何第三方窗口 → 立即关闭；
-//  - 上下文菜单（#32768）持有前台时不算失焦。
+//   - 弹窗曾获得前台 → 失去前台即关闭候选；但若前台回到打开前的窗口且
+//     距激活不足 1.2s，视为系统前台权限瞬时回退（托盘点击的激活权很短），
+//     不关闭——否则弹窗闪关，表现为"打不开"；
+//   - 切到任何第三方窗口 → 立即关闭；
+//   - 上下文菜单（#32768）持有前台时不算失焦。
 func (p *historyPopup) watchFocusLoss() {
 	popupHwnd := uintptr(p.win.Handle())
 	preFg := uintptr(p.snapshot.Foreground)
@@ -272,7 +272,6 @@ func (p *historyPopup) watchFocusLoss() {
 	}
 }
 
-
 // fluentItem 是列表条目。
 type fluentItem struct {
 	id      int64
@@ -283,12 +282,12 @@ type fluentItem struct {
 // fluentList 是自绘的 Fluent 风格列表：无表头/网格线，斑马纹 + 悬停高亮，
 // 每条两行（内容 + 相对时间），滚轮翻页，左键复制、右键原生菜单。
 type fluentList struct {
-	w       *walk.CustomWidget
-	p       *historyPopup
-	items   []fluentItem
-	hover   int // -1 无
-	scroll  int // 第一条可见条目的索引
-	rowH96  int
+	w      *walk.CustomWidget
+	p      *historyPopup
+	items  []fluentItem
+	hover  int // -1 无
+	scroll int // 第一条可见条目的索引
+	rowH96 int
 
 	fntText *walk.Font
 	fntTime *walk.Font
@@ -468,7 +467,7 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		}
 		// 第一行：内容
 		r1 := walk.Rectangle{
-			X:      pad, Y: y + walk.IntFrom96DPI(9, dpi),
+			X: pad, Y: y + walk.IntFrom96DPI(9, dpi),
 			Width:  bounds.Width - pad - walk.IntFrom96DPI(16, dpi),
 			Height: walk.IntFrom96DPI(20, dpi),
 		}
@@ -477,7 +476,7 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		}
 		// 第二行：相对时间
 		r2 := walk.Rectangle{
-			X:      pad, Y: y + walk.IntFrom96DPI(30, dpi),
+			X: pad, Y: y + walk.IntFrom96DPI(30, dpi),
 			Width:  bounds.Width - pad - walk.IntFrom96DPI(16, dpi),
 			Height: walk.IntFrom96DPI(16, dpi),
 		}

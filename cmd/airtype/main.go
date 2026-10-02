@@ -91,6 +91,7 @@ func run(dataDir string) int {
 		InjectText:   a.inject,
 		TogglePause:  a.togglePause,
 		Rescan:       a.rescan,
+		Logout:       a.logout,
 		OpenLog:      func() { openExplorerSelect(filepath.Join(dir, "airtype.log")) },
 		AutostartSet: autostart.Set,
 		AutostartEnabled: func() bool {
@@ -218,6 +219,20 @@ func (a *app) rescan() {
 		a.logger.Error("重启 bot 失败", "err", err)
 		a.tray.NotifyError("AirType", "重新扫码失败："+err.Error())
 	}
+}
+
+// logout 退出登录：停止 bot 并删除本地 token，回到未扫码状态。
+// 不自动弹二维码；之后可通过"重新扫码"或重启程序重新绑定。
+// （微信端 Bot 的授权关系无公开 API 可删，如需彻底移除请在手机微信里操作。）
+func (a *app) logout() {
+	a.logger.Info("退出登录：停止 bot 并删除本地 token")
+	a.stopBot()
+	if err := os.Remove(filepath.Join(a.dir, "default.json")); err != nil && !os.IsNotExist(err) {
+		a.logger.Error("删除 token 失败", "err", err)
+	}
+	a.tray.HideQR()
+	a.tray.SetState(ui.StateNeedQR)
+	a.tray.NotifyInfo("AirType", "已退出登录；需要时可通过\"重新扫码\"重新绑定")
 }
 
 func (a *app) onText(text string) error {

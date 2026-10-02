@@ -55,6 +55,8 @@ type Config struct {
 	TogglePause func() bool
 	// Rescan 重新扫码（停 bot、删 token、重启）。
 	Rescan func()
+	// Logout 退出登录（删本地 token，回到未扫码状态，停止 bot）。
+	Logout func()
 	// OpenLog 打开日志文件所在位置。
 	OpenLog func()
 	// Autostart 查询/设置开机自启（计划任务）。
@@ -153,6 +155,15 @@ func (t *Tray) buildMenu() {
 		}
 	})
 	menu.Actions().Add(rescan)
+
+	logout := walk.NewAction()
+	logout.SetText("退出登录")
+	logout.Triggered().Attach(func() {
+		if t.cfg.Logout != nil {
+			t.cfg.Logout()
+		}
+	})
+	menu.Actions().Add(logout)
 
 	openLog := walk.NewAction()
 	openLog.SetText("打开日志")

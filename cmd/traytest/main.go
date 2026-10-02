@@ -43,6 +43,7 @@ func main() {
 			return time.Now().Second()%2 == 0
 		},
 		Rescan:  func() { logger.Info("Rescan 被调用") },
+		Logout:  func() { logger.Info("Logout 被调用") },
 		OpenLog: func() { logger.Info("OpenLog 被调用") },
 		AutostartEnabled: func() bool { return false },
 		AutostartSet:     func(bool) error { return nil },

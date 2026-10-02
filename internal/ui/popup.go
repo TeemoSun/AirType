@@ -127,7 +127,7 @@ func (t *Tray) ensureHistoryPopup() {
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					HSpacer{},
 					Label{
-						Text:      "单击重发 · 右键复制/删除",
+						Text:      "单击复制 · 右键重发/删除",
 						TextColor: colTextGray,
 					},
 				},
@@ -151,6 +151,7 @@ func (t *Tray) ensureHistoryPopup() {
 					}
 				},
 				ContextMenuItems: []MenuItem{
+					Action{Text: "重发（打回原输入框）", OnTriggered: p.reinjectCurrent},
 					Action{Text: "复制", OnTriggered: p.copyCurrent},
 					Action{Text: "删除", OnTriggered: p.deleteCurrent},
 				},
@@ -165,11 +166,9 @@ func (t *Tray) ensureHistoryPopup() {
 	p.tv = tv
 	p.statusLbl = status
 	win.MakeTopmostToolWindow(uintptr(w.Handle()))
-	// 双击 / 回车与单击等价：重发
+	// 双击 / 回车 = 重发（打回打开弹窗前的输入框）
 	tv.ItemActivated().Attach(func() {
-		if idx := tv.CurrentIndex(); idx >= 0 {
-			p.reinject(idx)
-		}
+		p.reinjectCurrent()
 	})
 	t.popup = p
 }
@@ -184,7 +183,7 @@ func (p *historyPopup) styleCell(style *walk.CellStyle) {
 	}
 }
 
-// onMouseDown：左键单击条目 → 重发；右键 → 选中该行（供上下文菜单）。
+// onMouseDown：左键单击条目 → 复制；右键 → 选中该行（供上下文菜单）。
 func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
 	idx := p.tv.IndexAt(x, y)
 	if idx < 0 {
@@ -195,11 +194,21 @@ func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
 		return
 	}
 	if button == walk.LeftButton {
-		p.reinject(idx)
+		p.copyAt(idx)
 	}
 }
 
-// reinject 弹窗收起 → 焦点还原 → 注入；还原失败走剪贴板兜底（方案 §4.2）。
+// copyAt 复制指定条目并气泡确认。
+func (p *historyPopup) copyAt(i int) {
+	entries := p.tray.cfg.History.All()
+	if i < 0 || i >= len(entries) {
+		return
+	}
+	p.tray.copyToClipboard(entries[i].Text)
+	_ = p.tray.ni.ShowInfo("AirType", "已复制到剪贴板")
+}
+
+// reinject 重发指定条目：还原焦点 → 收起弹窗 → 注入（方案 §4.2）。
 func (p *historyPopup) reinject(i int) {
 	if i < 0 || i >= len(p.model.rows) {
 		return
@@ -208,23 +217,32 @@ func (p *historyPopup) reinject(i int) {
 	if i >= len(entries) {
 		return
 	}
-	p.injectAfterHide(entries[i].Text)
+	p.injectWithRestore(entries[i].Text)
 }
 
-// injectAfterHide 收起弹窗后异步还原焦点并注入（重发与新消息共用）。
-func (p *historyPopup) injectAfterHide(text string) {
+// injectWithRestore 焦点还原与注入（重发/弹窗期间新消息共用）。
+//
+// 顺序至关重要：必须趁弹窗仍持有前台（此时进程有前台激活权）先把目标
+// 窗口切回前台，然后再收起弹窗——顺序颠倒的话，弹窗一隐藏本进程就
+// 失去前台权限，SetForegroundWindow 会被系统的前台锁拒绝，这正是
+// "点了没反应、回不到原窗口"的根因。
+func (p *historyPopup) injectWithRestore(text string) {
 	snap := p.snapshot
-	p.hide()
 
 	go func() {
 		if err := win.RestoreFocus(snap); err != nil {
 			p.tray.cfg.Logger.Warn("焦点还原失败，走剪贴板兜底", "err", err)
-			p.tray.copyToClipboard(text)
 			p.tray.mw.Synchronize(func() {
+				p.hide()
+				p.tray.copyToClipboard(text)
 				_ = p.tray.ni.ShowInfo("AirType", "原窗口不可用，文本已复制到剪贴板，请手动粘贴")
 			})
 			return
 		}
+		// 目标窗口已在前台，此刻收起弹窗不会打扰它
+		p.tray.mw.Synchronize(func() { p.hide() })
+		// 等目标窗口内部焦点控件就绪再注入
+		time.Sleep(60 * time.Millisecond)
 		if err := p.tray.cfg.InjectText(text); err != nil {
 			p.tray.cfg.Logger.Error("重注入失败", "err", err)
 		}
@@ -232,14 +250,12 @@ func (p *historyPopup) injectAfterHide(text string) {
 }
 
 func (p *historyPopup) copyCurrent() {
-	idx := p.tv.CurrentIndex()
-	if idx < 0 {
-		return
-	}
-	entries := p.tray.cfg.History.All()
-	if idx < len(entries) {
-		p.tray.copyToClipboard(entries[idx].Text)
-	}
+	p.copyAt(p.tv.CurrentIndex())
+}
+
+// reinjectCurrent 重发当前选中条目（右键菜单/双击/回车触发）。
+func (p *historyPopup) reinjectCurrent() {
+	p.reinject(p.tv.CurrentIndex())
 }
 
 func (p *historyPopup) deleteCurrent() {

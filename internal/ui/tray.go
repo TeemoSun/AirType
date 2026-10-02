@@ -311,12 +311,12 @@ func (t *Tray) PopupVisible() bool {
 	return t.popupVisible.Load()
 }
 
-// ResumeAndInject 弹窗打开期间收到新消息：收起弹窗 → 还原焦点 → 注入，
+// ResumeAndInject 弹窗打开期间收到新消息：还原焦点 → 收起弹窗 → 注入，
 // 避免文字被打进弹窗自身而丢失。若执行时弹窗已关闭则直接注入。线程安全。
 func (t *Tray) ResumeAndInject(text string) {
 	t.mw.Synchronize(func() {
 		if t.popup != nil && t.popup.win.Visible() {
-			t.popup.injectAfterHide(text)
+			t.popup.injectWithRestore(text)
 			return
 		}
 		go func() {

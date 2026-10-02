@@ -12,10 +12,19 @@ vendor/
 dist/
 build/
 
-# Runtime data (tokens, logs)
+# Runtime data (tokens, logs, history)
 .weixin/
 *.log
+*.old.log
 token.json
+default.json
+history.json
+
+# Icon render temp files
+render_tmp*.html
+
+# ZCode session artifacts
+.zcode/
 
 # IDE
 .idea/

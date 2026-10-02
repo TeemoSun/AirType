@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -225,16 +226,26 @@ func (a *app) onText(text string) error {
 	return a.inject(text)
 }
 
-// inject 注入当前前台窗口，失败时气泡提示。
+// inject 注入当前前台窗口，失败时气泡提示。注入前后都记录目标窗口信息，
+// 便于定位"收到消息但没打字"类问题（按键到底去了哪里）。
 func (a *app) inject(text string) error {
+	fgTitle, fgExe := win.ForegroundInfo()
+	// 前台是桌面：无处输入，明确提醒而不是无声丢失
+	if fgTitle == "Program Manager" && strings.HasSuffix(strings.ToLower(fgExe), "explorer.exe") {
+		a.logger.Warn("前台是桌面，无输入框，跳过注入", "text已入历史", true)
+		a.tray.NotifyInfo("AirType", "当前前台是桌面，没有可输入的地方；请把焦点切到输入框后，从历史弹窗单击重发")
+		return nil
+	}
 	start := time.Now()
-	if err := typer.Type(text); err != nil {
-		a.logger.Error("注入失败", "err", err)
+	err := typer.Type(text)
+	if err != nil {
+		a.logger.Error("注入失败", "err", err, "fgWindow", fgTitle, "fgProc", fgExe)
 		a.tray.NotifyError("AirType", "注入失败："+err.Error())
 		return err
 	}
 	a.logger.Info("注入完成", "chars", len([]rune(text)),
-		"injectCost", time.Since(start).Round(time.Millisecond))
+		"injectCost", time.Since(start).Round(time.Millisecond),
+		"fgWindow", fgTitle, "fgProc", fgExe)
 	return nil
 }
 

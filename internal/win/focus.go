@@ -16,7 +16,38 @@ var (
 	pIsWindow             = user32.NewProc("IsWindow")
 	pGetWindowLongW       = user32.NewProc("GetWindowLongW")
 	pSetWindowLongW       = user32.NewProc("SetWindowLongW")
+	pGetWindowTextW       = user32.NewProc("GetWindowTextW")
+	pOpenProcess          = kernel32.NewProc("OpenProcess")
+	pQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
 )
+
+// ForegroundInfo 返回当前前台窗口的标题与所属进程 EXE 名（注入诊断用）。
+func ForegroundInfo() (title, exe string) {
+	h := uintptr(Foreground())
+	if h == 0 {
+		return "", ""
+	}
+	buf := make([]uint16, 256)
+	ret, _, _ := pGetWindowTextW.Call(h, uintptr(unsafe.Pointer(&buf[0])), 256)
+	if ret != 0 {
+		title = syscall.UTF16ToString(buf)
+	}
+	var pid uintptr
+	_, _, _ = pGetWindowThreadProcessId.Call(h, uintptr(unsafe.Pointer(&pid)))
+	if pid != 0 {
+		const processQueryLimitedInformation = 0x1000
+		if hProc, _, _ := pOpenProcess.Call(processQueryLimitedInformation, 0, pid); hProc != 0 {
+			defer syscall.NewLazyDLL("kernel32.dll").NewProc("CloseHandle").Call(hProc)
+			buf2 := make([]uint16, 512)
+			var size uint32 = 512
+			if r, _, _ := pQueryFullProcessImageNameW.Call(hProc, 0,
+				uintptr(unsafe.Pointer(&buf2[0])), uintptr(unsafe.Pointer(&size))); r != 0 {
+				exe = syscall.UTF16ToString(buf2)
+			}
+		}
+	}
+	return title, exe
+}
 
 // guiThreadInfo 对应 Win32 GUITHREADINFO（x64 下 80 字节）。
 type guiThreadInfo struct {

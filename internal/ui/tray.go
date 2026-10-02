@@ -256,6 +256,13 @@ func (t *Tray) NotifyError(title, info string) {
 	})
 }
 
+// NotifyInfo 弹出提示气泡（线程安全）。
+func (t *Tray) NotifyInfo(title, info string) {
+	t.mw.Synchronize(func() {
+		_ = t.ni.ShowInfo(title, info)
+	})
+}
+
 // ShowHistory 打开历史弹窗：先捕获当前焦点快照（方案 §4.2），再显示弹窗。
 func (t *Tray) ShowHistory() {
 	t.mw.Synchronize(func() {

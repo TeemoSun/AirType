@@ -129,13 +129,15 @@ func New(opts Options) (*Bot, error) {
 	c.Events().Subscribe(event.EventTypeConnected, b.onEvent)
 	c.Events().Subscribe(event.EventTypeDisconnected, b.onEvent)
 	c.Events().Subscribe(event.EventTypeSessionExpired, b.onEvent)
+	// 登录成功也视为已连接（Connected 兜底）：确保二维码窗口被收起
+	c.Events().Subscribe(event.EventTypeLogin, b.onEvent)
 
 	return b, nil
 }
 
 func (b *Bot) onEvent(_ context.Context, ev *event.Event) error {
 	switch ev.Type {
-	case event.EventTypeConnected:
+	case event.EventTypeConnected, event.EventTypeLogin:
 		b.setState(StateConnected)
 	case event.EventTypeDisconnected:
 		b.setState(StateDisconnected)

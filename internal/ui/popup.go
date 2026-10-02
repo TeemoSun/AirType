@@ -127,7 +127,7 @@ func (t *Tray) ensureHistoryPopup() {
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					HSpacer{},
 					Label{
-						Text:      "单击复制 · 右键重发/删除",
+						Text:      "单击重发 · 右键复制/删除",
 						TextColor: colTextGray,
 					},
 				},
@@ -154,8 +154,7 @@ func (t *Tray) ensureHistoryPopup() {
 					Action{Text: "重发（打回原输入框）", OnTriggered: p.reinjectCurrent},
 					Action{Text: "复制", OnTriggered: p.copyCurrent},
 					Action{Text: "删除", OnTriggered: p.deleteCurrent},
-				},
-			},
+				},			},
 		},
 	}.Create()
 	if err != nil {
@@ -183,7 +182,7 @@ func (p *historyPopup) styleCell(style *walk.CellStyle) {
 	}
 }
 
-// onMouseDown：左键单击条目 → 复制；右键 → 选中该行（供上下文菜单）。
+// onMouseDown：左键单击条目 → 重发（还原焦点后注入）；右键 → 选中该行。
 func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
 	idx := p.tv.IndexAt(x, y)
 	if idx < 0 {
@@ -194,7 +193,7 @@ func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
 		return
 	}
 	if button == walk.LeftButton {
-		p.copyAt(idx)
+		p.reinject(idx)
 	}
 }
 

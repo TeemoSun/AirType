@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image/png"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/lxn/walk"
@@ -63,10 +64,11 @@ type Config struct {
 
 // Tray 持有托盘 UI。所有公开方法线程安全（内部 marshal 到 UI 线程）。
 type Tray struct {
-	cfg    Config
-	mw     *walk.MainWindow
-	ni     *walk.NotifyIcon
-	popup  *historyPopup
+	cfg          Config
+	mw           *walk.MainWindow
+	ni           *walk.NotifyIcon
+	popup        *historyPopup
+	popupVisible atomic.Bool
 
 	pauseAction  *walk.Action
 	state        TrayState
@@ -103,7 +105,7 @@ func NewTray(cfg Config) (*Tray, error) {
 
 	t.buildMenu()
 
-	// 左键单击：待扫码时弹出二维码窗口；有历史时弹历史弹窗；否则气泡摘要
+	// 左键单击：待扫码时弹出二维码窗口；有历史时弹窗做开关切换；否则气泡摘要
 	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if button != walk.LeftButton {
 			return
@@ -115,6 +117,11 @@ func NewTray(cfg Config) (*Tray, error) {
 			return
 		}
 		if t.cfg.History != nil {
+			// 再点一次托盘 = 收起弹窗（开关语义）
+			if t.popup != nil && t.popup.win.Visible() {
+				t.popup.hide()
+				return
+			}
 			t.ShowHistory()
 			return
 		}
@@ -210,6 +217,9 @@ func (t *Tray) SetState(s TrayState) {
 		t.state = s
 		_ = t.applyIcon()
 		_ = t.ni.SetToolTip(t.StatusText())
+		if t.popup != nil {
+			t.popup.updateHeader(s)
+		}
 	})
 }
 
@@ -296,6 +306,27 @@ func (t *Tray) HistoryChanged() {
 	})
 }
 
+// PopupVisible 历史弹窗是否处于打开状态（线程安全，供消息处理分支）。
+func (t *Tray) PopupVisible() bool {
+	return t.popupVisible.Load()
+}
+
+// ResumeAndInject 弹窗打开期间收到新消息：收起弹窗 → 还原焦点 → 注入，
+// 避免文字被打进弹窗自身而丢失。若执行时弹窗已关闭则直接注入。线程安全。
+func (t *Tray) ResumeAndInject(text string) {
+	t.mw.Synchronize(func() {
+		if t.popup != nil && t.popup.win.Visible() {
+			t.popup.injectAfterHide(text)
+			return
+		}
+		go func() {
+			if err := t.cfg.InjectText(text); err != nil {
+				t.cfg.Logger.Error("注入失败", "err", err)
+			}
+		}()
+	})
+}
+
 // copyToClipboard 复制文本到剪贴板（线程安全）。
 func (t *Tray) copyToClipboard(text string) {
 	t.mw.Synchronize(func() {
@@ -350,22 +381,32 @@ func (t *Tray) ensureQRWindow() {
 	if t.qrWin != nil {
 		return
 	}
-	var win *walk.MainWindow
+	var w *walk.MainWindow
 	var iv *walk.ImageView
 	err := MainWindow{
-		AssignTo: &win,
-		Title:    "AirType · 微信扫码绑定",
-		Size:     Size{Width: 480, Height: 520},
-		Layout:   VBox{},
+		AssignTo:   &w,
+		Title:      "AirType · 微信扫码绑定",
+		Size:       Size{Width: 480, Height: 580},
+		Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)},
+		Layout:     VBox{Margins: Margins{Left: 20, Top: 24, Right: 20, Bottom: 20}, Spacing: 14},
 		Children: []Widget{
+			Label{
+				Text: "扫码绑定微信",
+				Font: Font{Family: "Segoe UI", PointSize: 15, Bold: true},
+			},
+			Label{
+				Text:      "用手机微信扫描下方二维码，授权后电脑端自动连接",
+				TextColor: walk.RGB(138, 143, 150),
+			},
 			ImageView{AssignTo: &iv, MinSize: Size{Width: 420, Height: 420}},
+			VSpacer{},
 		},
 	}.Create()
 	if err != nil {
 		t.cfg.Logger.Error("创建二维码窗口失败", "err", err)
 		return
 	}
-	t.qrWin = win
+	t.qrWin = w
 	t.qrView = iv
 }
 

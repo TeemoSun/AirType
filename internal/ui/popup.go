@@ -20,9 +20,9 @@ func relTime(t time.Time) string {
 	case d < time.Minute:
 		return "刚刚"
 	case d < time.Hour:
-		return fmt.Sprintf("%d分钟前", int(d.Minutes()))
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%d小时前", int(d.Hours()))
+		return fmt.Sprintf("%d 小时前", int(d.Hours()))
 	case d < 48*time.Hour:
 		return "昨天 " + t.Format("15:04")
 	default:
@@ -47,6 +47,16 @@ func clampText(s string, maxRunes int) string {
 	}
 	return string(out)
 }
+
+// 配色（现代化浅色主题）
+var (
+	colWhite    = walk.RGB(255, 255, 255)
+	colZebra    = walk.RGB(248, 249, 250)
+	colTextGray = walk.RGB(138, 143, 150)
+	colDotGreen = walk.RGB(34, 197, 94)
+	colDotRed   = walk.RGB(239, 68, 68)
+	colDotGray  = walk.RGB(156, 163, 175)
+)
 
 // histModel 是历史列表的表模型（walk.TableModel）。
 type histModel struct {
@@ -74,19 +84,20 @@ func (m *histModel) Value(row, col int) interface{} {
 func (m *histModel) refresh(entries []history.Entry) {
 	m.rows = make([]histRow, len(entries))
 	for i, e := range entries {
-		m.rows[i] = histRow{Text: clampText(e.Text, 48), TimeStr: relTime(e.ReceivedAt)}
+		m.rows[i] = histRow{Text: clampText(e.Text, 42), TimeStr: relTime(e.ReceivedAt)}
 	}
 	m.PublishRowsReset()
 }
 
 // historyPopup 是 OneDrive 风格的历史弹窗（方案 §4.1）。
 type historyPopup struct {
-	tray     *Tray
-	win      *walk.MainWindow
-	tv       *walk.TableView
-	model    *histModel
-	snapshot win.FocusSnapshot
-	shownAt  time.Time
+	tray      *Tray
+	win       *walk.MainWindow
+	tv        *walk.TableView
+	model     *histModel
+	snapshot  win.FocusSnapshot
+	shownAt   time.Time
+	statusLbl *walk.Label
 }
 
 func (t *Tray) ensureHistoryPopup() {
@@ -96,31 +107,43 @@ func (t *Tray) ensureHistoryPopup() {
 	p := &historyPopup{tray: t, model: &histModel{}}
 	var w *walk.MainWindow
 	var tv *walk.TableView
+	var status *walk.Label
 
 	err := MainWindow{
-		AssignTo: &w,
-		Title:    "AirType 历史",
-		Size:     Size{Width: 380, Height: 480},
-		Layout:   VBox{MarginsZero: true},
+		AssignTo:   &w,
+		Title:      "AirType 历史",
+		Size:       Size{Width: 400, Height: 520},
+		Background: SolidColorBrush{Color: colWhite},
+		Layout:     VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
 			Composite{
-				Layout: HBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 8}},
+				Background: SolidColorBrush{Color: colWhite},
+				Layout:     HBox{Margins: Margins{Left: 18, Top: 16, Right: 18, Bottom: 10}},
 				Children: []Widget{
-					Label{Text: "隔空打字", Font: Font{Family: "Segoe UI", PointSize: 14, Bold: true}},
+					Label{
+						Text:  "隔空打字",
+						Font:  Font{Family: "Segoe UI", PointSize: 15, Bold: true},
+					},
+					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					HSpacer{},
-					Label{Text: "单击重发 · 右键复制/删除", TextColor: walk.RGB(120, 120, 120)},
+					Label{
+						Text:      "单击重发 · 右键复制/删除",
+						TextColor: colTextGray,
+					},
 				},
 			},
 			TableView{
-				AssignTo:            &tv,
-				Model:               p.model,
-				ColumnsOrderable:    false,
-				ColumnsSizable:      false,
-				MultiSelection:      false,
+				AssignTo:       &tv,
+				Model:          p.model,
+				Background:     SolidColorBrush{Color: colWhite},
+				ColumnsOrderable:   false,
+				ColumnsSizable:     false,
+				MultiSelection:     false,
 				Columns: []TableViewColumn{
-					{Title: "内容", Width: 260},
-					{Title: "时间", Width: 78, Alignment: AlignFar},
+					{Title: "内容", Width: 290},
+					{Title: "时间", Width: 74, Alignment: AlignFar},
 				},
+				StyleCell: p.styleCell,
 				OnMouseDown: p.onMouseDown,
 				OnKeyDown: func(key walk.Key) {
 					if key == walk.KeyEscape {
@@ -140,6 +163,7 @@ func (t *Tray) ensureHistoryPopup() {
 	}
 	p.win = w
 	p.tv = tv
+	p.statusLbl = status
 	win.MakeTopmostToolWindow(uintptr(w.Handle()))
 	// 双击 / 回车与单击等价：重发
 	tv.ItemActivated().Attach(func() {
@@ -148,6 +172,16 @@ func (t *Tray) ensureHistoryPopup() {
 		}
 	})
 	t.popup = p
+}
+
+// styleCell 现代化样式：时间列灰字、奇数行浅灰底（斑马纹）。
+func (p *historyPopup) styleCell(style *walk.CellStyle) {
+	if style.Col() == 1 {
+		style.TextColor = colTextGray
+	}
+	if style.Row()%2 == 1 {
+		style.BackgroundColor = colZebra
+	}
 }
 
 // onMouseDown：左键单击条目 → 重发；右键 → 选中该行（供上下文菜单）。
@@ -174,7 +208,11 @@ func (p *historyPopup) reinject(i int) {
 	if i >= len(entries) {
 		return
 	}
-	text := entries[i].Text
+	p.injectAfterHide(entries[i].Text)
+}
+
+// injectAfterHide 收起弹窗后异步还原焦点并注入（重发与新消息共用）。
+func (p *historyPopup) injectAfterHide(text string) {
 	snap := p.snapshot
 	p.hide()
 
@@ -212,6 +250,7 @@ func (p *historyPopup) deleteCurrent() {
 	entries := p.tray.cfg.History.All()
 	if idx < len(entries) {
 		p.tray.cfg.History.Delete(entries[idx].ID)
+		p.reload()
 	}
 }
 
@@ -222,45 +261,86 @@ func (p *historyPopup) reload() {
 	p.model.refresh(p.tray.cfg.History.All())
 }
 
-// show 锚定到工作区右下角并显示，启动失焦自动关闭监听。
+// updateHeader 按连接状态更新标题行状态点颜色（须在 UI 线程调用）。
+func (p *historyPopup) updateHeader(s TrayState) {
+	if p.statusLbl == nil {
+		return
+	}
+	c := colDotGray
+	switch s {
+	case StateConnected:
+		c = colDotGreen
+	case StateNeedQR, StateDisconnected:
+		c = colDotRed
+	}
+	p.statusLbl.SetTextColor(c)
+}
+
+// show 显示弹窗：主动激活（防"显示但未激活"被误判失焦）、锚定到
+// 鼠标所在显示器工作区右下角（点击托盘时鼠标就在图标附近）。
 func (p *historyPopup) show() {
-	ww, wh := win.WorkArea()
-	w96, h96 := 380, 480
-	// 以像素为基准右下角锚定（96dpi 尺寸随窗口 DPI 已由 walk 处理窗口尺寸）
-	_ = p.win.SetBoundsPixels(walk.Rectangle{
-		X:      int(ww) - w96 - 16,
-		Y:      int(wh) - h96 - 12,
-		Width:  w96,
-		Height: h96,
-	})
 	p.reload()
+	p.updateHeader(p.tray.state)
 	p.win.Show()
+	p.anchor()
 	p.shownAt = time.Now()
+	p.tray.popupVisible.Store(true)
+	// 托盘点击赋予了前台激活权，这里显式激活弹窗；
+	// 若不激活，弹窗会被失焦守卫当成"已失焦"而在宽限期后误关闭
+	// ——这正是"时弹时不弹"的根因。
+	go func() {
+		_ = win.Activate(win.Hwnd(p.win.Handle()), 1200*time.Millisecond)
+	}()
 	go p.watchFocusLoss()
 }
 
+// anchor 用窗口"实际像素尺寸"（已含 DPI 缩放）做右下角锚定并钳制，
+// 修复按 96-DPI 尺寸估算导致的溢出屏幕问题。
+func (p *historyPopup) anchor() {
+	b := p.win.BoundsPixels()
+	rc := win.WorkAreaAtCursor()
+	x := int(rc.X) + int(rc.Width) - b.Width - 12
+	y := int(rc.Y) + int(rc.Height) - b.Height - 8
+	if x < int(rc.X) {
+		x = int(rc.X)
+	}
+	if y < int(rc.Y) {
+		y = int(rc.Y)
+	}
+	_ = p.win.SetBoundsPixels(walk.Rectangle{X: x, Y: y, Width: b.Width, Height: b.Height})
+}
+
 func (p *historyPopup) hide() {
+	p.tray.popupVisible.Store(false)
 	p.win.Hide()
 }
 
-// watchFocusLoss 弹窗失焦（点到别处）自动关闭；
-// 上下文菜单（窗口类 #32768）持有前台时不视为失焦。
+// watchFocusLoss 失焦自动关闭：
+//  - 弹窗曾获得过前台 → 失去前台即关闭；
+//  - 上下文菜单（#32768）持有前台时不算失焦；
+//  - 前台尚未落到弹窗（激活未站稳/被系统回退）：只要前台仍是打开前的
+//    那个窗口就保持显示，绝不按计时器强关——那是"时弹时不弹"的来源；
+//    用户切到任何第三方窗口时才关闭。
 func (p *historyPopup) watchFocusLoss() {
+	popupHwnd := uintptr(p.win.Handle())
+	preFg := uintptr(p.snapshot.Foreground) // 打开弹窗前的前台窗口
+	wasActivated := false
 	for range time.Tick(250 * time.Millisecond) {
 		if !p.win.Visible() {
 			return
 		}
-		// 刚 Show 的瞬间前台切换有延迟，给 500ms 宽限
-		if time.Since(p.shownAt) < 500*time.Millisecond {
-			continue
-		}
-		if uintptr(win.Foreground()) == uintptr(p.win.Handle()) {
+		fg := uintptr(win.Foreground())
+		if fg == popupHwnd {
+			wasActivated = true
 			continue
 		}
 		if win.ForegroundClassName() == "#32768" {
 			continue
 		}
-		p.tray.mw.Synchronize(func() { p.win.Hide() })
-		return
+		if wasActivated || (fg != 0 && fg != preFg) {
+			p.tray.mw.Synchronize(func() { p.hide() })
+			return
+		}
+		// fg == preFg：激活被系统回退，弹窗保持可用（点击条目仍有效）
 	}
 }

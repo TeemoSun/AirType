@@ -223,9 +223,9 @@ func (a *app) onText(text string) error {
 		a.logger.Info("已暂停，只记录不注入", "chars", len([]rune(text)))
 		return nil
 	}
-	// 弹窗打开期间注入会打进弹窗自身：先收起并还原焦点
+	// 弹窗打开期间注入会打进弹窗自身：只入历史（列表实时刷新），不注入
 	if a.tray.PopupVisible() {
-		a.tray.ResumeAndInject(text)
+		a.logger.Info("弹窗打开，跳过注入（已入历史，可复制）", "chars", len([]rune(text)))
 		return nil
 	}
 	return a.inject(text)

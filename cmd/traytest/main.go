@@ -80,14 +80,12 @@ func scenario(logger *slog.Logger, tray *ui.Tray, hist *history.Store) {
 			logger.Info("靶子窗口已激活")
 		}
 	} else {
-		logger.Warn("未找到靶子窗口，弹窗仍会打开但重注入无目标")
+		logger.Warn("未找到靶子窗口，弹窗仍会正常打开")
 	}
 	time.Sleep(1 * time.Second)
 	tray.ShowHistory()
 	logger.Info("历史弹窗已打开（焦点快照已捕获）")
 
-	// 阶段 4：重注入第 0 条（验证 焦点还原 → 注入 链路）
-	time.Sleep(3 * time.Second)
-	tray.PopupReinject(0)
-	logger.Info("已触发重注入第 0 条")
+	// 阶段 4：弹窗保持打开（重发功能已移除，仅验证展示与交互入口）
+	select {}
 }

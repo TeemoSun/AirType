@@ -3,9 +3,7 @@
 package win
 
 import (
-	"fmt"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -62,10 +60,10 @@ type guiThreadInfo struct {
 	rcCaret      struct{ Left, Top, Right, Bottom int32 }
 }
 
-// FocusSnapshot 记录"打开弹窗前"的前台窗口与其内部焦点控件（方案 §4.2）。
+// FocusSnapshot 记录"打开弹窗前"的前台窗口（失焦自动关闭的判据）。
 type FocusSnapshot struct {
 	Foreground uintptr // 顶层前台窗口
-	Focus      uintptr // 前台窗口内部的焦点控件
+	Focus      uintptr // 前台窗口内部的焦点控件（预留）
 }
 
 // CaptureFocus 采集当前焦点快照。
@@ -87,18 +85,6 @@ func CaptureFocus() FocusSnapshot {
 		focus = fg
 	}
 	return FocusSnapshot{Foreground: fg, Focus: focus}
-}
-
-// RestoreFocus 把快照的前台窗口带回前台（复用 Activate 的三级兜底）。
-// 目标窗口已关闭时返回错误，由调用方走剪贴板兜底。
-func RestoreFocus(s FocusSnapshot) error {
-	if s.Foreground == 0 {
-		return fmt.Errorf("win: 无效的焦点快照")
-	}
-	if alive, _, _ := pIsWindow.Call(s.Foreground); alive == 0 {
-		return fmt.Errorf("win: 目标窗口已关闭")
-	}
-	return Activate(Hwnd(s.Foreground), 800*time.Millisecond)
 }
 
 // IsWindowAlive 判断窗口句柄是否仍有效。

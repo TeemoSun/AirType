@@ -288,15 +288,6 @@ func (t *Tray) ShowHistory() {
 	})
 }
 
-// PopupReinject 重注入第 i 条历史（与用户单击条目等价；供自动化测试）。线程安全。
-func (t *Tray) PopupReinject(i int) {
-	t.mw.Synchronize(func() {
-		if t.popup != nil && t.popup.win.Visible() {
-			t.popup.reinject(i)
-		}
-	})
-}
-
 // HistoryChanged 历史变更通知（弹窗打开时刷新列表）。线程安全。
 func (t *Tray) HistoryChanged() {
 	t.mw.Synchronize(func() {
@@ -306,25 +297,10 @@ func (t *Tray) HistoryChanged() {
 	})
 }
 
-// PopupVisible 历史弹窗是否处于打开状态（线程安全，供消息处理分支）。
+// PopupVisible 历史弹窗是否处于打开状态（线程安全，供消息处理分支：
+// 弹窗打开时注入会打进弹窗自身，跳过改为仅入历史）。
 func (t *Tray) PopupVisible() bool {
 	return t.popupVisible.Load()
-}
-
-// ResumeAndInject 弹窗打开期间收到新消息：还原焦点 → 收起弹窗 → 注入，
-// 避免文字被打进弹窗自身而丢失。若执行时弹窗已关闭则直接注入。线程安全。
-func (t *Tray) ResumeAndInject(text string) {
-	t.mw.Synchronize(func() {
-		if t.popup != nil && t.popup.win.Visible() {
-			t.popup.injectWithRestore(text)
-			return
-		}
-		go func() {
-			if err := t.cfg.InjectText(text); err != nil {
-				t.cfg.Logger.Error("注入失败", "err", err)
-			}
-		}()
-	})
 }
 
 // copyToClipboard 复制文本到剪贴板（线程安全）。

@@ -24,15 +24,18 @@ import (
 type TrayState int
 
 const (
-	StateNeedQR TrayState = iota // 需要扫码
-	StateConnected               // 已连接
-	StateDisconnected            // 断开
+	StateNeedQR    TrayState = iota // 未登录/需重新扫码（红）
+	StateConnected                  // 一切正常（绿）
+	StateWarning                    // 连接异常/长时间未收到消息（黄）
+	StateDisconnected               // 连接断开（黄）
 )
 
 func (s TrayState) String() string {
 	switch s {
 	case StateConnected:
 		return "已连接"
+	case StateWarning:
+		return "连接异常"
 	case StateNeedQR:
 		return "待扫码"
 	case StateDisconnected:
@@ -220,6 +223,18 @@ func (t *Tray) buildMenu() {
 // Run 进入消息循环，阻塞至托盘退出。
 func (t *Tray) Run() {
 	t.mw.Run()
+}
+
+// State 返回当前托盘状态（线程安全，经 UI 线程读取）。
+func (t *Tray) State() TrayState {
+	done := make(chan TrayState, 1)
+	t.mw.Synchronize(func() { done <- t.state })
+	select {
+	case v := <-done:
+		return v
+	case <-time.After(2 * time.Second):
+		return StateDisconnected
+	}
 }
 
 // SetState 更新连接状态（线程安全）。
@@ -429,13 +444,15 @@ func (t *Tray) ensureQRWindow() {
 }
 
 // applyIcon 按状态换图标（须在 UI 线程调用）。
+// 语义：绿=一切正常；黄=连接异常/长时间未收到消息；红=未登录或需重新扫码。
+// 暂停注入不单独换色，tooltip 会说明。
 func (t *Tray) applyIcon() error {
 	name := "red"
-	switch {
-	case t.paused:
-		name = "gray"
-	case t.state == StateConnected:
+	switch t.state {
+	case StateConnected:
 		name = "green"
+	case StateWarning, StateDisconnected:
+		name = "yellow"
 	}
 	icon, err := stateIcon(name)
 	if err != nil {

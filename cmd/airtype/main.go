@@ -107,6 +107,9 @@ func run(dataDir string) int {
 
 	logger.Info("AirType 启动", "version", version, "datadir", dir)
 
+	// 健康巡检：已连接但长时间收不到消息 → 黄色（网络/通道异常自检，方案 §7）
+	go healthWatchdog(a.appCtx, a)
+
 	if err := a.startBot(); err != nil {
 		logger.Error("启动 bot 失败", "err", err)
 		tray.NotifyError("AirType", "启动失败："+err.Error())
@@ -139,6 +142,33 @@ type app struct {
 	runDone   chan struct{}
 }
 
+// staleAfter 是"已连接但多久没收到消息算异常"的阈值。
+// 长轮询没有心跳，只能靠收信时间推断（方案 §7 静默失败自检）。
+const staleAfter = 10 * time.Minute
+
+// healthWatchdog 周期检查：已连接却超过 staleAfter 没收到任何消息 → 转黄。
+// 收到新消息或状态事件会转回绿色/对应颜色。
+func healthWatchdog(ctx context.Context, a *app) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.mu.Lock()
+			b := a.b
+			a.mu.Unlock()
+			if b == nil || b.State() != bot.StateConnected || a.paused.Load() {
+				continue
+			}
+			if last := b.LastReceivedAt(); !last.IsZero() && time.Since(last) > staleAfter {
+				a.tray.SetState(ui.StateWarning)
+			}
+		}
+	}
+}
+
 func (a *app) togglePause() bool {
 	a.paused.Store(!a.paused.Load())
 	p := a.paused.Load()
@@ -162,9 +192,9 @@ func (a *app) startBot() error {
 				a.tray.SetState(ui.StateConnected)
 				a.tray.HideQR()
 			case bot.StateSessionExpired:
-				a.tray.SetState(ui.StateNeedQR)
+				a.tray.SetState(ui.StateNeedQR) // 红：登录过期，需重新扫码
 			case bot.StateDisconnected:
-				a.tray.SetState(ui.StateDisconnected)
+				a.tray.SetState(ui.StateWarning) // 黄：连不上服务器（token 仍有效）
 			}
 		},
 	})
@@ -238,6 +268,10 @@ func (a *app) logout() {
 func (a *app) onText(text string) error {
 	received := time.Now()
 	a.tray.SetLastReceived(received)
+	// 收到消息 = 通道健康，从黄色巡检态恢复为绿色
+	if a.tray.State() == ui.StateWarning {
+		a.tray.SetState(ui.StateConnected)
+	}
 	a.hist.Add(text) // 暂停时也记录：消息不丢，事后可从历史弹窗补发
 	if a.paused.Load() {
 		a.logger.Info("已暂停，只记录不注入", "chars", len([]rune(text)))

@@ -9,10 +9,10 @@ import (
 	"github.com/lxn/walk"
 )
 
-//go:embed icons/green.png icons/gray.png icons/red.png
+//go:embed icons/green.png icons/yellow.png icons/red.png
 var iconFS embed.FS
 
-// stateIcon 加载状态图标：green=已连接、gray=暂停、red=断开/需扫码。
+// stateIcon 加载状态图标：green=一切正常、yellow=连接异常、red=未登录/需扫码。
 func stateIcon(name string) (*walk.Icon, error) {
 	f, err := iconFS.Open("icons/" + name + ".png")
 	if err != nil {

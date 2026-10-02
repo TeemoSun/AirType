@@ -8,14 +8,14 @@ import (
 )
 
 var (
-	pGetGUIThreadInfo     = user32.NewProc("GetGUIThreadInfo")
-	pSystemParametersInfo = user32.NewProc("SystemParametersInfoW")
-	pGetClassNameW        = user32.NewProc("GetClassNameW")
-	pIsWindow             = user32.NewProc("IsWindow")
-	pGetWindowLongW       = user32.NewProc("GetWindowLongW")
-	pSetWindowLongW       = user32.NewProc("SetWindowLongW")
-	pGetWindowTextW       = user32.NewProc("GetWindowTextW")
-	pOpenProcess          = kernel32.NewProc("OpenProcess")
+	pGetGUIThreadInfo           = user32.NewProc("GetGUIThreadInfo")
+	pSystemParametersInfo       = user32.NewProc("SystemParametersInfoW")
+	pGetClassNameW              = user32.NewProc("GetClassNameW")
+	pIsWindow                   = user32.NewProc("IsWindow")
+	pGetWindowLongW             = user32.NewProc("GetWindowLongW")
+	pSetWindowLongW             = user32.NewProc("SetWindowLongW")
+	pGetWindowTextW             = user32.NewProc("GetWindowTextW")
+	pOpenProcess                = kernel32.NewProc("OpenProcess")
 	pQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
 )
 
@@ -49,15 +49,15 @@ func ForegroundInfo() (title, exe string) {
 
 // guiThreadInfo 对应 Win32 GUITHREADINFO（x64 下 80 字节）。
 type guiThreadInfo struct {
-	cbSize       uint32
-	flags        uint32
-	hwndActive   uintptr
-	hwndFocus    uintptr
-	hwndCapture  uintptr
+	cbSize        uint32
+	flags         uint32
+	hwndActive    uintptr
+	hwndFocus     uintptr
+	hwndCapture   uintptr
 	hwndMenuOwner uintptr
-	hwndMoveSize uintptr
-	hwndCaret    uintptr
-	rcCaret      struct{ Left, Top, Right, Bottom int32 }
+	hwndMoveSize  uintptr
+	hwndCaret     uintptr
+	rcCaret       struct{ Left, Top, Right, Bottom int32 }
 }
 
 // FocusSnapshot 记录"打开弹窗前"的前台窗口（失焦自动关闭的判据）。

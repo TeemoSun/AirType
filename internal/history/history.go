@@ -18,13 +18,13 @@ type Entry struct {
 
 // Store 是历史存储。所有方法线程安全。
 type Store struct {
-	mu      sync.Mutex
-	entries []Entry // 最新在前
-	max     int
-	path    string
-	timer   *time.Timer
-	delay   time.Duration
-	closed  bool
+	mu       sync.Mutex
+	entries  []Entry // 最新在前
+	max      int
+	path     string
+	timer    *time.Timer
+	delay    time.Duration
+	closed   bool
 	onChange func()
 }
 

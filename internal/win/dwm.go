@@ -8,13 +8,13 @@ import (
 )
 
 var (
-	dwmapi                = syscall.NewLazyDLL("dwmapi.dll")
+	dwmapi                 = syscall.NewLazyDLL("dwmapi.dll")
 	pDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
-	pSetWindowPos         = user32.NewProc("SetWindowPos")
-	pCreatePopupMenu      = user32.NewProc("CreatePopupMenu")
-	pAppendMenuW          = user32.NewProc("AppendMenuW")
-	pTrackPopupMenuEx     = user32.NewProc("TrackPopupMenuEx")
-	pDestroyMenu          = user32.NewProc("DestroyMenu")
+	pSetWindowPos          = user32.NewProc("SetWindowPos")
+	pCreatePopupMenu       = user32.NewProc("CreatePopupMenu")
+	pAppendMenuW           = user32.NewProc("AppendMenuW")
+	pTrackPopupMenuEx      = user32.NewProc("TrackPopupMenuEx")
+	pDestroyMenu           = user32.NewProc("DestroyMenu")
 )
 
 // MakeBorderlessRoundedPopup 把窗口变成 Win11 风格无边框圆角浮层：

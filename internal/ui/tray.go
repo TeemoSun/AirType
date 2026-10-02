@@ -384,6 +384,7 @@ func (t *Tray) ensureQRWindow() {
 	}
 	t.qrWin = w
 	t.qrView = iv
+	win.RoundCorners(uintptr(w.Handle()))
 }
 
 // applyIcon 按状态换图标（须在 UI 线程调用）。

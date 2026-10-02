@@ -48,53 +48,23 @@ func clampText(s string, maxRunes int) string {
 	return string(out)
 }
 
-// 配色（现代化浅色主题）
+// 配色（Fluent 浅色主题）
 var (
 	colWhite    = walk.RGB(255, 255, 255)
-	colZebra    = walk.RGB(248, 249, 250)
+	colZebra    = walk.RGB(245, 246, 247)
+	colHover    = walk.RGB(233, 235, 238)
+	colText     = walk.RGB(26, 28, 32)
 	colTextGray = walk.RGB(138, 143, 150)
 	colDotGreen = walk.RGB(34, 197, 94)
 	colDotRed   = walk.RGB(239, 68, 68)
 	colDotGray  = walk.RGB(156, 163, 175)
 )
 
-// histModel 是历史列表的表模型（walk.TableModel）。
-type histModel struct {
-	walk.TableModelBase
-	rows []histRow
-}
-
-type histRow struct {
-	Text    string
-	TimeStr string
-}
-
-func (m *histModel) RowCount() int { return len(m.rows) }
-
-func (m *histModel) Value(row, col int) interface{} {
-	if row < 0 || row >= len(m.rows) {
-		return ""
-	}
-	if col == 0 {
-		return m.rows[row].Text
-	}
-	return m.rows[row].TimeStr
-}
-
-func (m *histModel) refresh(entries []history.Entry) {
-	m.rows = make([]histRow, len(entries))
-	for i, e := range entries {
-		m.rows[i] = histRow{Text: clampText(e.Text, 42), TimeStr: relTime(e.ReceivedAt)}
-	}
-	m.PublishRowsReset()
-}
-
-// historyPopup 是 OneDrive 风格的历史弹窗（方案 §4.1）。
+// historyPopup 是 OneDrive 风格的无边框圆角历史浮层（方案 §4.1）。
 type historyPopup struct {
 	tray      *Tray
 	win       *walk.MainWindow
-	tv        *walk.TableView
-	model     *histModel
+	list      *fluentList
 	snapshot  win.FocusSnapshot
 	shownAt   time.Time
 	statusLbl *walk.Label
@@ -104,10 +74,10 @@ func (t *Tray) ensureHistoryPopup() {
 	if t.popup != nil {
 		return
 	}
-	p := &historyPopup{tray: t, model: &histModel{}}
+	p := &historyPopup{tray: t}
 	var w *walk.MainWindow
-	var tv *walk.TableView
-	var status *walk.Label
+	var status, closeBtn *walk.Label
+	var listHost *walk.Composite
 
 	err := MainWindow{
 		AssignTo:   &w,
@@ -115,45 +85,38 @@ func (t *Tray) ensureHistoryPopup() {
 		Size:       Size{Width: 400, Height: 520},
 		Background: SolidColorBrush{Color: colWhite},
 		Layout:     VBox{MarginsZero: true, SpacingZero: true},
+		OnKeyDown: func(key walk.Key) {
+			if key == walk.KeyEscape {
+				p.hide()
+			}
+		},
 		Children: []Widget{
+			// 标题行：大标题 + 状态点 + 关闭按钮
 			Composite{
 				Background: SolidColorBrush{Color: colWhite},
-				Layout:     HBox{Margins: Margins{Left: 18, Top: 16, Right: 18, Bottom: 10}},
+				Layout:     HBox{Margins: Margins{Left: 20, Top: 18, Right: 12, Bottom: 10}},
 				Children: []Widget{
-					Label{
-						Text:  "隔空打字",
-						Font:  Font{Family: "Segoe UI", PointSize: 15, Bold: true},
-					},
+					Label{Text: "隔空打字", Font: Font{Family: "Segoe UI", PointSize: 15, Bold: true}},
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					HSpacer{},
-					Label{
-						Text:      "单击复制到剪贴板",
-						TextColor: colTextGray,
-					},
+					Label{AssignTo: &closeBtn, Text: "✕", TextColor: colTextGray},
 				},
 			},
-			TableView{
-				AssignTo:       &tv,
-				Model:          p.model,
-				Background:     SolidColorBrush{Color: colWhite},
-				ColumnsOrderable:   false,
-				ColumnsSizable:     false,
-				MultiSelection:     false,
-				Columns: []TableViewColumn{
-					{Title: "内容", Width: 290},
-					{Title: "时间", Width: 74, Alignment: AlignFar},
+			// 列表宿主：自绘 Fluent 列表挂到这里
+			Composite{
+				AssignTo:   &listHost,
+				Background: SolidColorBrush{Color: colWhite},
+				Layout:     VBox{MarginsZero: true, SpacingZero: true},
+			},
+			// 底部提示
+			Composite{
+				Background: SolidColorBrush{Color: colWhite},
+				Layout:     HBox{Margins: Margins{Left: 20, Top: 8, Right: 20, Bottom: 12}},
+				Children: []Widget{
+					Label{Text: "单击复制 · 右键复制/删除", TextColor: colTextGray},
+					HSpacer{},
 				},
-				StyleCell: p.styleCell,
-				OnMouseDown: p.onMouseDown,
-				OnKeyDown: func(key walk.Key) {
-					if key == walk.KeyEscape {
-						p.hide()
-					}
-				},
-				ContextMenuItems: []MenuItem{
-					Action{Text: "复制", OnTriggered: p.copyCurrent},
-					Action{Text: "删除", OnTriggered: p.deleteCurrent},
-				},			},
+			},
 		},
 	}.Create()
 	if err != nil {
@@ -161,72 +124,26 @@ func (t *Tray) ensureHistoryPopup() {
 		return
 	}
 	p.win = w
-	p.tv = tv
 	p.statusLbl = status
-	win.MakeTopmostToolWindow(uintptr(w.Handle()))
-	// 双击 / 回车与单击一致：复制（重发只在右键菜单，避免误触发）
-	tv.ItemActivated().Attach(func() {
-		p.copyCurrent()
+
+	// 关闭按钮
+	closeBtn.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button == walk.LeftButton {
+			p.hide()
+		}
 	})
+
+	// 无边框 + 圆角（Win11 风格浮层）
+	win.MakeTopmostToolWindow(uintptr(w.Handle()))
+	win.MakeBorderlessRoundedPopup(uintptr(w.Handle()))
+
+	fl, err := newFluentList(listHost, p)
+	if err != nil {
+		t.cfg.Logger.Error("创建列表失败", "err", err)
+		return
+	}
+	p.list = fl
 	t.popup = p
-}
-
-// styleCell 现代化样式：时间列灰字、奇数行浅灰底（斑马纹）。
-func (p *historyPopup) styleCell(style *walk.CellStyle) {
-	if style.Col() == 1 {
-		style.TextColor = colTextGray
-	}
-	if style.Row()%2 == 1 {
-		style.BackgroundColor = colZebra
-	}
-}
-
-// onMouseDown：左键单击条目 → 复制；右键 → 选中该行（供上下文菜单）。
-func (p *historyPopup) onMouseDown(x, y int, button walk.MouseButton) {
-	idx := p.tv.IndexAt(x, y)
-	if idx < 0 {
-		return
-	}
-	if button == walk.RightButton {
-		_ = p.tv.SetCurrentIndex(idx)
-		return
-	}
-	if button == walk.LeftButton {
-		p.copyAt(idx)
-	}
-}
-
-// copyAt 复制指定条目并气泡确认。
-func (p *historyPopup) copyAt(i int) {
-	entries := p.tray.cfg.History.All()
-	if i < 0 || i >= len(entries) {
-		return
-	}
-	p.tray.copyToClipboard(entries[i].Text)
-	_ = p.tray.ni.ShowInfo("AirType", "已复制到剪贴板")
-}
-
-func (p *historyPopup) copyCurrent() {
-	p.copyAt(p.tv.CurrentIndex())
-}
-
-func (p *historyPopup) deleteCurrent() {
-	idx := p.tv.CurrentIndex()
-	if idx < 0 {
-		return
-	}
-	entries := p.tray.cfg.History.All()
-	if idx < len(entries) {
-		p.tray.cfg.History.Delete(entries[idx].ID)
-		p.reload()
-	}
-}
-
-func (p *historyPopup) reload() {
-	if p.tray.cfg.History == nil {
-		return
-	}
-	p.model.refresh(p.tray.cfg.History.All())
 }
 
 // updateHeader 按连接状态更新标题行状态点颜色（须在 UI 线程调用）。
@@ -244,26 +161,24 @@ func (p *historyPopup) updateHeader(s TrayState) {
 	p.statusLbl.SetTextColor(c)
 }
 
-// show 显示弹窗：主动激活（防"显示但未激活"被误判失焦）、锚定到
-// 鼠标所在显示器工作区右下角（点击托盘时鼠标就在图标附近）。
+// show 显示弹窗：主动激活（防被失焦守卫误杀）、锚定鼠标所在显示器工作区右下角。
 func (p *historyPopup) show() {
 	p.reload()
 	p.updateHeader(p.tray.state)
 	p.win.Show()
 	p.anchor()
+	if p.list != nil {
+		p.list.Focus()
+	}
 	p.shownAt = time.Now()
 	p.tray.popupVisible.Store(true)
-	// 托盘点击赋予了前台激活权，这里显式激活弹窗；
-	// 若不激活，弹窗会被失焦守卫当成"已失焦"而在宽限期后误关闭
-	// ——这正是"时弹时不弹"的根因。
 	go func() {
 		_ = win.Activate(win.Hwnd(p.win.Handle()), 1200*time.Millisecond)
 	}()
 	go p.watchFocusLoss()
 }
 
-// anchor 用窗口"实际像素尺寸"（已含 DPI 缩放）做右下角锚定并钳制，
-// 修复按 96-DPI 尺寸估算导致的溢出屏幕问题。
+// anchor 用窗口"实际像素尺寸"（已含 DPI 缩放）做右下角锚定并钳制。
 func (p *historyPopup) anchor() {
 	b := p.win.BoundsPixels()
 	rc := win.WorkAreaAtCursor()
@@ -283,15 +198,31 @@ func (p *historyPopup) hide() {
 	p.win.Hide()
 }
 
+func (p *historyPopup) reload() {
+	if p.tray.cfg.History == nil || p.list == nil {
+		return
+	}
+	entries := p.tray.cfg.History.All()
+	p.list.setItems(entries)
+}
+
+// copyAt 复制指定条目并气泡确认。
+func (p *historyPopup) copyAt(i int) {
+	entries := p.tray.cfg.History.All()
+	if i < 0 || i >= len(entries) {
+		return
+	}
+	p.tray.copyToClipboard(entries[i].Text)
+	_ = p.tray.ni.ShowInfo("AirType", "已复制到剪贴板")
+}
+
 // watchFocusLoss 失焦自动关闭：
 //  - 弹窗曾获得过前台 → 失去前台即关闭；
 //  - 上下文菜单（#32768）持有前台时不算失焦；
-//  - 前台尚未落到弹窗（激活未站稳/被系统回退）：只要前台仍是打开前的
-//    那个窗口就保持显示，绝不按计时器强关——那是"时弹时不弹"的来源；
-//    用户切到任何第三方窗口时才关闭。
+//  - 前台仍是打开前那个窗口时保持显示（激活被回退的竞态宽限）。
 func (p *historyPopup) watchFocusLoss() {
 	popupHwnd := uintptr(p.win.Handle())
-	preFg := uintptr(p.snapshot.Foreground) // 打开弹窗前的前台窗口
+	preFg := uintptr(p.snapshot.Foreground)
 	wasActivated := false
 	for range time.Tick(250 * time.Millisecond) {
 		if !p.win.Visible() {
@@ -309,6 +240,220 @@ func (p *historyPopup) watchFocusLoss() {
 			p.tray.mw.Synchronize(func() { p.hide() })
 			return
 		}
-		// fg == preFg：激活被系统回退，弹窗保持可用（点击条目仍有效）
 	}
+}
+
+// fluentItem 是列表条目。
+type fluentItem struct {
+	id      int64
+	text    string
+	timeStr string
+}
+
+// fluentList 是自绘的 Fluent 风格列表：无表头/网格线，斑马纹 + 悬停高亮，
+// 每条两行（内容 + 相对时间），滚轮翻页，左键复制、右键原生菜单。
+type fluentList struct {
+	w       *walk.CustomWidget
+	p       *historyPopup
+	items   []fluentItem
+	hover   int // -1 无
+	scroll  int // 第一条可见条目的索引
+	rowH96  int
+
+	fntText *walk.Font
+	fntTime *walk.Font
+
+	brZebra *walk.SolidColorBrush
+	brHover *walk.SolidColorBrush
+}
+
+const (
+	flRowH96       = 54 // 行高（96dpi 基准）
+	flTextPad96    = 18
+	flMaxTextRunes = 36
+)
+
+func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) {
+	fl := &fluentList{p: p, hover: -1, rowH96: flRowH96}
+
+	var err error
+	if fl.fntText, err = walk.NewFont("Segoe UI", 9, 0); err != nil {
+		return nil, err
+	}
+	if fl.fntTime, err = walk.NewFont("Segoe UI", 8, 0); err != nil {
+		return nil, err
+	}
+	if fl.brZebra, err = walk.NewSolidColorBrush(colZebra); err != nil {
+		return nil, err
+	}
+	if fl.brHover, err = walk.NewSolidColorBrush(colHover); err != nil {
+		return nil, err
+	}
+
+	w, err := walk.NewCustomWidgetPixels(parent, 0, fl.paint)
+	if err != nil {
+		return nil, err
+	}
+	fl.w = w
+
+	w.MouseMove().Attach(fl.onMouseMove)
+	w.MouseDown().Attach(fl.onMouseDown)
+	w.MouseWheel().Attach(fl.onMouseWheel)
+	return fl, nil
+}
+
+// Focus 让列表获得键盘焦点（滚轮事件发给焦点窗口）。
+func (fl *fluentList) Focus() {
+	_ = fl.w.SetFocus()
+}
+
+// setItems 更新数据并重绘。
+func (fl *fluentList) setItems(entries []history.Entry) {
+	fl.items = make([]fluentItem, len(entries))
+	for i, e := range entries {
+		fl.items[i] = fluentItem{
+			id:      e.ID,
+			text:    clampText(e.Text, flMaxTextRunes),
+			timeStr: relTime(e.ReceivedAt),
+		}
+	}
+	fl.clampScroll()
+	fl.hover = -1
+	fl.w.Invalidate()
+}
+
+func (fl *fluentList) rowHPixels() int {
+	return walk.IntFrom96DPI(fl.rowH96, fl.w.DPI())
+}
+
+func (fl *fluentList) clampScroll() {
+	dpi := fl.w.DPI()
+	_ = dpi
+	// 可见行数由实际绘制时计算；这里按保守值钳住上界
+	if fl.scroll > len(fl.items)-1 {
+		fl.scroll = len(fl.items) - 1
+	}
+	if fl.scroll < 0 {
+		fl.scroll = 0
+	}
+}
+
+// hitTest 返回坐标对应的条目索引，空白处返回 -1（坐标为像素）。
+func (fl *fluentList) hitTest(x, y int) int {
+	if x < 0 || y < 0 {
+		return -1
+	}
+	idx := fl.scroll + y/fl.rowHPixels()
+	if idx < fl.scroll || idx >= len(fl.items) {
+		return -1
+	}
+	return idx
+}
+
+func (fl *fluentList) onMouseMove(x, y int, _ walk.MouseButton) {
+	idx := fl.hitTest(x, y)
+	if idx != fl.hover {
+		fl.hover = idx
+		fl.w.Invalidate()
+	}
+}
+
+func (fl *fluentList) onMouseWheel(x, y int, button walk.MouseButton) {
+	delta := walk.MouseWheelEventDelta(button)
+	if delta == 0 {
+		return
+	}
+	rows := -delta / 40 // 常规一格 120 → 3 行
+	if rows == 0 {
+		rows = -delta / 120
+		if rows == 0 {
+			rows = 1
+		}
+	}
+	fl.scroll += rows
+	fl.clampScroll()
+	fl.w.Invalidate()
+}
+
+func (fl *fluentList) onMouseDown(x, y int, button walk.MouseButton) {
+	idx := fl.hitTest(x, y)
+	if idx < 0 {
+		return
+	}
+	if button == walk.LeftButton {
+		fl.p.copyAt(idx)
+		return
+	}
+	if button == walk.RightButton {
+		choice := win.ShowContextMenu(uintptr(fl.p.win.Handle()), []string{"复制", "删除"})
+		switch choice {
+		case 0:
+			fl.p.copyAt(idx)
+		case 1:
+			if fl.p.tray.cfg.History != nil {
+				fl.p.tray.cfg.History.Delete(fl.items[idx].id)
+				fl.p.reload()
+			}
+		}
+	}
+}
+
+// paint 自绘列表内容（坐标均为像素）。
+func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
+	dpi := fl.w.DPI()
+	rowH := fl.rowHPixels()
+	pad := walk.IntFrom96DPI(flTextPad96, dpi)
+
+	if len(fl.items) == 0 {
+		txt := "暂无消息，用手机微信发一条试试"
+		r := walk.Rectangle{X: 0, Y: bounds.Height/2 - 20, Width: bounds.Width, Height: 40}
+		return canvas.DrawTextPixels(txt, fl.fntText, colTextGray, r, walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
+	}
+
+	// 可见行数（用于钳制滚动）
+	visRows := bounds.Height / rowH
+	if maxScroll := len(fl.items) - visRows; fl.scroll > maxScroll {
+		fl.scroll = maxScroll
+		if fl.scroll < 0 {
+			fl.scroll = 0
+		}
+	}
+
+	y := 0
+	for i := fl.scroll; i < len(fl.items) && y < bounds.Height; i++ {
+		it := fl.items[i]
+		// 行背景：悬停 > 斑马纹 > 无
+		var brush walk.Brush
+		if i == fl.hover {
+			brush = fl.brHover
+		} else if i%2 == 1 {
+			brush = fl.brZebra
+		}
+		if brush != nil {
+			rect := walk.Rectangle{X: 6, Y: y + 1, Width: bounds.Width - 12, Height: rowH - 2}
+			if err := canvas.FillRectanglePixels(brush, rect); err != nil {
+				return err
+			}
+		}
+		// 第一行：内容
+		r1 := walk.Rectangle{
+			X:      pad, Y: y + walk.IntFrom96DPI(9, dpi),
+			Width:  bounds.Width - pad - walk.IntFrom96DPI(16, dpi),
+			Height: walk.IntFrom96DPI(20, dpi),
+		}
+		if err := canvas.DrawTextPixels(it.text, fl.fntText, colText, r1, walk.TextEndEllipsis|walk.TextSingleLine); err != nil {
+			return err
+		}
+		// 第二行：相对时间
+		r2 := walk.Rectangle{
+			X:      pad, Y: y + walk.IntFrom96DPI(30, dpi),
+			Width:  bounds.Width - pad - walk.IntFrom96DPI(16, dpi),
+			Height: walk.IntFrom96DPI(16, dpi),
+		}
+		if err := canvas.DrawTextPixels(it.timeStr, fl.fntTime, colTextGray, r2, walk.TextEndEllipsis|walk.TextSingleLine); err != nil {
+			return err
+		}
+		y += rowH
+	}
+	return nil
 }

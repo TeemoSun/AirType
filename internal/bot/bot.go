@@ -122,7 +122,8 @@ func New(opts Options) (*Bot, error) {
 			opts.Logger.Error("消息处理失败", "key", key, "err", err)
 			return err
 		}
-		opts.Logger.Info("消息已处理", "key", key, "chars", len([]rune(text)))
+		opts.Logger.Info("消息已处理", "key", key, "chars", len([]rune(text)),
+			"age", time.Since(time.UnixMilli(msg.CreateTimeMs)).Round(time.Millisecond))
 		return nil
 	})
 

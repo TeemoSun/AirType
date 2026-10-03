@@ -1,59 +1,63 @@
 //go:build windows
 
-// Package autostart 通过计划任务实现开机自启。
+// Package autostart 通过 HKCU Run 注册表键实现开机自启。
 //
-// requireAdministrator 的 EXE 无法走 HKCU Run 键（UAE 限制），
-// 注册"登录时、以最高权限运行"的计划任务一并解决自启与 UAC 弹窗
-// （见开发方案 §4.5）。本程序以管理员运行，schtasks 可直接成功。
+// 旧实现走计划任务（schtasks /SC ONLOGON /RL HIGHEST），那是
+// requireAdministrator 清单年代的设计（见开发方案 §4.5）：创建登录触发的
+// 计划任务需要管理员权限，而程序现为 asInvoker 普通权限运行——实测普通
+// 权限下 schtasks 一律"拒绝访问"（带不带 /RL HIGHEST 都一样），托盘里的
+// 开机自启开关形同虚设。HKCU Run 无需提权、当前用户登录即生效，与产品
+// "免管理员"形态一致（2026-10-03 修复，见 §10.10）。
 package autostart
 
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
-	"syscall"
+
+	"golang.org/x/sys/windows/registry"
 )
 
-const taskName = "AirType_Autostart"
+const (
+	runKey  = `Software\Microsoft\Windows\CurrentVersion\Run`
+	runName = "AirType"
+)
 
-func run(args ...string) (string, error) {
-	cmd := exec.Command("schtasks", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	var out strings.Builder
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	return out.String(), err
-}
-
-// Enabled 查询自启任务是否存在。
+// Enabled 查询自启项是否存在。
 func Enabled() bool {
-	_, err := run("/Query", "/TN", taskName)
+	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer k.Close()
+	_, _, err = k.GetStringValue(runName)
 	return err == nil
 }
 
 // Set 启用或禁用开机自启。
 func Set(enable bool) error {
-	if enable {
-		exe, err := os.Executable()
+	if !enable {
+		k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 		if err != nil {
-			return fmt.Errorf("autostart: 获取自身路径失败: %w", err)
+			return fmt.Errorf("autostart: 打开 Run 键失败: %w", err)
 		}
-		out, err := run("/Create", "/F", "/TN", taskName,
-			"/TR", `"`+exe+`"`, "/SC", "ONLOGON", "/RL", "HIGHEST")
-		if err != nil {
-			return fmt.Errorf("autostart: 创建计划任务失败: %s (%w)", strings.TrimSpace(out), err)
+		defer k.Close()
+		if err := k.DeleteValue(runName); err != nil && err != registry.ErrNotExist {
+			return fmt.Errorf("autostart: 删除自启项失败: %w", err)
 		}
 		return nil
 	}
-	out, err := run("/Delete", "/F", "/TN", taskName)
+	exe, err := os.Executable()
 	if err != nil {
-		// 任务本就不存在视为成功
-		if !Enabled() {
-			return nil
-		}
-		return fmt.Errorf("autostart: 删除计划任务失败: %s (%w)", strings.TrimSpace(out), err)
+		return fmt.Errorf("autostart: 获取自身路径失败: %w", err)
+	}
+	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("autostart: 打开 Run 键失败: %w", err)
+	}
+	defer k.Close()
+	// 路径含空格时必须带引号，否则 Run 键解析会截断
+	if err := k.SetStringValue(runName, `"`+exe+`"`); err != nil {
+		return fmt.Errorf("autostart: 写入自启项失败: %w", err)
 	}
 	return nil
 }

@@ -93,6 +93,7 @@ func (t *Tray) buildMenu() {
 			_ = t.ni.ShowError("AirType", "设置开机自启失败；详情见日志")
 			return
 		}
+		t.cfg.Logger.Info("切换开机自启", "enabled", want)
 		autostart.SetChecked(want)
 	})
 	menu.Actions().Add(autostart)

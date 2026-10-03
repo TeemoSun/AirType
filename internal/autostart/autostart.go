@@ -38,6 +38,10 @@ func Set(enable bool) error {
 	if !enable {
 		k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 		if err != nil {
+			// 键都不存在＝本来就没启用（精简用户配置档可能无此键）
+			if err == registry.ErrNotExist {
+				return nil
+			}
 			return fmt.Errorf("autostart: 打开 Run 键失败: %w", err)
 		}
 		defer k.Close()
@@ -50,9 +54,10 @@ func Set(enable bool) error {
 	if err != nil {
 		return fmt.Errorf("autostart: 获取自身路径失败: %w", err)
 	}
-	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
+	// CreateKey＝打开或创建：精简配置档（如 CI runner）可能没有预置 Run 键
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 	if err != nil {
-		return fmt.Errorf("autostart: 打开 Run 键失败: %w", err)
+		return fmt.Errorf("autostart: 创建 Run 键失败: %w", err)
 	}
 	defer k.Close()
 	// 路径含空格时必须带引号，否则 Run 键解析会截断

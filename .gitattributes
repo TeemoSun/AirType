@@ -1,0 +1,9 @@
+# Windows runner 的 autocrlf 会把检出变 CRLF，导致 gofmt -l 全量报红；
+# Go 源码与脚本强制 LF，跨平台一致。
+*.go   text eol=lf
+*.sh   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf

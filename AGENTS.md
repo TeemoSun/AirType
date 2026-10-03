@@ -43,6 +43,7 @@ gofmt -w <改动的文件>        # CI 校验 gofmt/tidy/vet/test
 - **walk**：带子控件的窗口必须设 Layout（否则 startLayout 崩）；`DPI()` 必须在 `Show()` 之后取；`Synchronize` 只入队不唤醒；托盘图标丢了只能**销毁重建** NotifyIcon（SetVisible 是 NIM_MODIFY 救不回）；walk 菜单强制 `MNS_CHECKORBMP`（左侧空白列是它，非 bug）；**walk Label 按单行测高**——长说明文案会被无声截断，必须拆成多个 Label；**NewBitmapFromImageForDPI 语义是"源图定义在 96dpi"**——按物理像素生成的位图要 ForDPI 包装，否则双重折算（二维码曾因此只剩一半）；walk 公开 API 先查源码（`~/go/pkg/mod/github.com/lxn/walk@*/`），别凭记忆
 - **COM/Go syscall**：COM 对象指针指向的是 **vtable 指针**，取方法要两次解引用（`dwrite.go` 的 vtCall；直接 `*(obj+index*8)` 必崩）；vtable 槽位以 Wine 的 d2d1.idl/dwrite.idl 为权威；COM 指针一律存 `unsafe.Pointer`（go vet 禁止 uintptr→unsafe.Pointer）；数组索引式取槽位是 vet 认可写法
 - **windowsgui**：stderr 是死句柄，日志必须走 `applog`（tolerantWriter）
+- **深色模式两坑**：walk 自绘控件（CustomWidget）默认**白底擦除**，深色主题必须 `SetBackground(主题刷)` 且 paint 里再整面铺底（双保险）；深色窗口上的**原生按钮**必须 `win.SetWindowThemeDark`（uxtheme 的 DarkMode_Explorer），否则是刺眼白块。窗口布局把多余空间给主内容区（StretchFactor=1），否则会被摊进头部行
 - **QQ 协议**：`getAppAccessToken` 的 `expires_in` 是**字符串**；绑定密文布局 iv(12)+ct+tag(16) AES-256-GCM；WS intents=1<<25；WS 读超时必须**每帧续期**（gorilla 的 deadline 是绝对时刻，不续期则固定时长必断）；C2C 消息必须按绑定者 openid 过滤；细节见 `internal/qqbot/bind.go` 头注释与 §10.6
 - **日志 age 字段**包含本机时钟偏差（曾因快 8s 误判恒定延迟）；QQ（WebSocket 推送）天生比微信（长轮询）快，属平台差异
 - 二次实例/任务栏重建的图标守护链路在 `internal/win/trayguard.go`（子类化主窗口），改动 tray.go 的窗口创建时注意它依赖 mw 句柄

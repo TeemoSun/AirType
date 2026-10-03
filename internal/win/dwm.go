@@ -11,7 +11,19 @@ var (
 	dwmapi                 = syscall.NewLazyDLL("dwmapi.dll")
 	pDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 	pSetWindowPos          = user32.NewProc("SetWindowPos")
+	pSetWindowTheme        = syscall.NewLazyDLL("uxtheme.dll").NewProc("SetWindowTheme")
 )
+
+// SetWindowThemeDark 让原生控件（按钮等）改用深色主题渲染
+// （uxtheme "DarkMode_Explorer"，Win10 1809+；旧系统调用无害失败）。
+// 深色模式下自绘窗口底是深色，原生按钮若留在浅色皮肤会变成刺眼白块。
+func SetWindowThemeDark(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	cls, _ := syscall.UTF16PtrFromString("DarkMode_Explorer")
+	_, _, _ = pSetWindowTheme.Call(hwnd, uintptr(unsafe.Pointer(cls)), 0)
+}
 
 // MakeBorderlessRoundedPopup 把窗口变成 Win11 风格无边框圆角浮层：
 // 去掉标题栏/粗边框，强制 DWM 圆角。Win10 上圆角调用无害失败。

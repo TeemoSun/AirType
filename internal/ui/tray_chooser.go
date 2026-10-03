@@ -37,6 +37,7 @@ func (t *Tray) ensureChooserWindow() {
 	pal, _ := currentPalette()
 
 	var w *walk.MainWindow
+	var btnWX, btnQQ *walk.PushButton
 	err := MainWindow{
 		AssignTo:   &w,
 		Title:      "AirType · 选择绑定通道",
@@ -63,6 +64,7 @@ func (t *Tray) ensureChooserWindow() {
 				Layout: HBox{Margins: Margins{Left: 0, Top: 14, Right: 0, Bottom: 0}, Spacing: 16},
 				Children: []Widget{
 					PushButton{
+						AssignTo:      &btnWX,
 						Text:          "微信",
 						MinSize:       Size{Width: 152, Height: 44},
 						StretchFactor: 1,
@@ -75,6 +77,7 @@ func (t *Tray) ensureChooserWindow() {
 						},
 					},
 					PushButton{
+						AssignTo:      &btnQQ,
 						Text:          "QQ 机器人",
 						MinSize:       Size{Width: 152, Height: 44},
 						StretchFactor: 1,
@@ -107,4 +110,13 @@ func (t *Tray) ensureChooserWindow() {
 	})
 	win.RoundCorners(uintptr(w.Handle()))
 	win.EnableDarkTitlebar(uintptr(w.Handle()), dark)
+	if dark {
+		// 深色窗口底上的原生按钮必须切深色主题，否则是刺眼的白色块
+		if btnWX != nil {
+			win.SetWindowThemeDark(uintptr(btnWX.Handle()))
+		}
+		if btnQQ != nil {
+			win.SetWindowThemeDark(uintptr(btnQQ.Handle()))
+		}
+	}
 }

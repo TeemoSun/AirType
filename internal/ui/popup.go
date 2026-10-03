@@ -128,11 +128,13 @@ func (t *Tray) ensureHistoryPopup() {
 					},
 				},
 			},
-			// 列表宿主：自绘 Fluent 列表挂到这里
+			// 列表宿主：自绘 Fluent 列表挂到这里；StretchFactor=1 占满
+			// 头部/底部之外的剩余高度（否则多余空间被摊进头部，比例怪异）
 			Composite{
-				AssignTo:   &listHost,
-				Background: SolidColorBrush{Color: pal.Window},
-				Layout:     VBox{MarginsZero: true, SpacingZero: true},
+				AssignTo:      &listHost,
+				Background:    SolidColorBrush{Color: pal.Window},
+				Layout:        VBox{MarginsZero: true, SpacingZero: true},
+				StretchFactor: 1,
 			},
 			// 底部提示
 			Composite{
@@ -440,6 +442,7 @@ type fluentList struct {
 	brHover *walk.SolidColorBrush
 	brSel   *walk.SolidColorBrush
 	brThumb *walk.SolidColorBrush
+	brBkgnd *walk.SolidColorBrush
 }
 
 func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) {
@@ -462,12 +465,18 @@ func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) 
 	if fl.brThumb, err = walk.NewSolidColorBrush(pal.ScrollThumb); err != nil {
 		return nil, err
 	}
+	if fl.brBkgnd, err = walk.NewSolidColorBrush(pal.Window); err != nil {
+		return nil, err
+	}
 
 	w, err := walk.NewCustomWidgetPixels(parent, 0, fl.paint)
 	if err != nil {
 		return nil, err
 	}
 	fl.w = w
+	// 自绘控件默认白底擦除：深色主题下必须铺主题底色，
+	// 否则整个列表区域是一块刺眼的白板（白字也看不见）
+	w.SetBackground(fl.brBkgnd)
 
 	w.MouseMove().Attach(fl.onMouseMove)
 	w.MouseDown().Attach(fl.onMouseDown)
@@ -682,6 +691,13 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	rowH := fl.rowHPixels()
 	pad := walk.IntFrom96DPI(flTextPad96, dpi)
 
+	// 整面铺主题底色：与 SetBackground 双保险，深色主题绝不露白底
+	if fl.brBkgnd != nil {
+		if err := canvas.FillRectanglePixels(fl.brBkgnd, bounds); err != nil {
+			return err
+		}
+	}
+
 	if len(fl.items) == 0 {
 		txt := fl.emptyText()
 		r := walk.Rectangle{X: 0, Y: bounds.Height/2 - 20, Width: bounds.Width, Height: 40}
@@ -766,7 +782,15 @@ func (fl *fluentList) emptyText() string {
 }
 
 // paintCloseButton 自绘右上角 ✕（无边框窗口没有系统关闭键）。
+// 先铺主题底色：自绘控件默认白底擦除，深色主题下会留一条白带。
 func paintCloseButton(canvas *walk.Canvas, b walk.Rectangle, pal Palette) error {
+	bg, err := walk.NewSolidColorBrush(pal.Window)
+	if err == nil {
+		defer bg.Dispose()
+		if err := canvas.FillRectanglePixels(bg, b); err != nil {
+			return err
+		}
+	}
 	pen, err := walk.NewCosmeticPen(walk.PenSolid, pal.TextSecondary)
 	if err != nil {
 		return err

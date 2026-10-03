@@ -41,11 +41,7 @@ var paletteDark = Palette{
 	Flash:         walk.RGB(134, 220, 165),
 }
 
-var (
-	themeMu    sync.Mutex
-	themeDark  bool
-	themeKnown bool
-)
+var themeMu sync.Mutex
 
 // systemDark 读系统应用主题（AppsUseLightTheme=0 即深色）；读不到按浅色。
 func systemDark() bool {
@@ -63,14 +59,12 @@ func systemDark() bool {
 }
 
 // currentPalette 返回当前配色与是否深色（深色时窗口须染深色标题栏）。
-// 首次调用探测并缓存；ensureXWindow 在创建窗口前调用以跟随系统切换。
+// 每次都重读注册表（只在创建/打开窗口时调用，开销可忽略）：
+// 运行中切换系统深浅色，下一个打开的窗口即跟随新主题。
 func currentPalette() (Palette, bool) {
 	themeMu.Lock()
 	defer themeMu.Unlock()
-	if !themeKnown {
-		themeDark, themeKnown = systemDark(), true
-	}
-	if themeDark {
+	if systemDark() {
 		return paletteDark, true
 	}
 	return paletteLight, false

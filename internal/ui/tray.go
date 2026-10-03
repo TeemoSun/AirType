@@ -85,6 +85,9 @@ type Config struct {
 	ToggleAutoEnter  func() bool
 	// ChooseChannel 通道选择窗口点击"微信"或"QQ"时回调（启动对应绑定流程）。
 	ChooseChannel func(choice ChannelChoice)
+	// QRDismissed 用户主动关掉扫码窗口（✕）时回调；QQ 绑定流程据此取消，
+	// 微信扫码可安全忽略（SDK 继续等待，左键托盘可重新打开二维码）。
+	QRDismissed func()
 	// Logout 退出登录（清理当前通道凭据，回到未绑定状态，重新弹选择窗口）。
 	Logout func()
 	// OpenLog 打开日志文件所在位置。
@@ -342,6 +345,18 @@ func (t *Tray) Run() {
 	t.mw.Run()
 }
 
+// CurrentChannelMode 返回当前通道模式（线程安全，经 UI 线程读取）。
+func (t *Tray) CurrentChannelMode() ChannelMode {
+	done := make(chan ChannelMode, 1)
+	t.mw.Synchronize(func() { done <- t.mode })
+	select {
+	case v := <-done:
+		return v
+	case <-time.After(2 * time.Second):
+		return ChannelNone
+	}
+}
+
 // State 返回当前托盘状态（线程安全，经 UI 线程读取）。
 func (t *Tray) State() TrayState {
 	done := make(chan TrayState, 1)
@@ -594,6 +609,12 @@ func (t *Tray) ensureChooserWindow() {
 		return
 	}
 	t.chooserWin = w
+	// 点 ✕ 只隐藏不销毁：walk 默认 WM_CLOSE 会 Dispose 窗口，
+	// 而惰性创建指针不清空，之后 Show 静默失效（左键从此无响应）。
+	w.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		*canceled = true
+		w.Hide()
+	})
 	win.RoundCorners(uintptr(w.Handle()))
 }
 
@@ -686,6 +707,14 @@ func (t *Tray) ensureQRWindow() {
 	t.qrView = iv
 	t.qrTitleLbl = ttl
 	t.qrHintLbl = hnt
+	// 同通道选择窗口：点 ✕ 只隐藏不销毁；QQ 绑定流程据此取消
+	w.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		*canceled = true
+		w.Hide()
+		if t.cfg.QRDismissed != nil {
+			go t.cfg.QRDismissed() // 回调里做通道切换（可能阻塞），不卡 UI 线程
+		}
+	})
 	win.RoundCorners(uintptr(w.Handle()))
 }
 

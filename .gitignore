@@ -35,3 +35,4 @@ render_tmp*.html
 # OS
 Thumbs.db
 .DS_Store
+traytest-history.json

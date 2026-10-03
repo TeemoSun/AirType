@@ -20,8 +20,9 @@ var ErrAlreadyRunning = errors.New("win: 已有 AirType 实例在运行")
 var guard uintptr
 
 // AcquireSingleInstance 以命名互斥量保证单实例；重复启动返回 ErrAlreadyRunning。
+// 用 Local\（会话）命名空间：快速用户切换/多用户机器上各会话互不阻塞。
 func AcquireSingleInstance(name string) error {
-	p, err := syscall.UTF16PtrFromString("Global\\" + name)
+	p, err := syscall.UTF16PtrFromString("Local\\" + name)
 	if err != nil {
 		return err
 	}

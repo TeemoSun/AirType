@@ -5,6 +5,7 @@ package history
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -26,6 +27,10 @@ type Store struct {
 	delay    time.Duration
 	closed   bool
 	onChange func()
+
+	// flushMu 串行化 Flush：防抖定时器、Close 与手动 Flush 可能并发，
+	// 且必须拿到锁后重新序列化最新快照（而不是复用旧快照落盘）。
+	flushMu sync.Mutex
 }
 
 // Open 打开（或创建）历史文件 path，容量上限 max 条。
@@ -113,8 +118,11 @@ func (s *Store) scheduleFlushLocked() {
 	s.timer = time.AfterFunc(s.delay, func() { _ = s.Flush() })
 }
 
-// Flush 立即落盘。
+// Flush 立即落盘。临时文件名唯一（CreateTemp）并先 Sync 再改名，
+// 避免并发落盘互相覆盖半截内容、以及断电留下空文件。
 func (s *Store) Flush() error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	s.mu.Lock()
 	data, err := json.MarshalIndent(s.entries, "", " ")
 	if err != nil {
@@ -124,11 +132,24 @@ func (s *Store) Flush() error {
 	path := s.path
 	s.mu.Unlock()
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Close 停止防抖计时并最终落盘。

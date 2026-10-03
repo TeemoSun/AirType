@@ -60,11 +60,7 @@ func run(dataDir string) int {
 		}
 	}
 
-	logger, closer, err := applog.New(dir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "错误:", err)
-		return 1
-	}
+	logger, closer := applog.New(dir)
 	defer closer()
 
 	if err := win.AcquireSingleInstance("AirType"); err != nil {
@@ -107,6 +103,7 @@ func run(dataDir string) int {
 		},
 		ToggleAutoEnter: a.toggleAutoEnter,
 		ChooseChannel:   a.chooseChannel,
+		QRDismissed:     a.qrDismissed,
 		Logout:          a.logout,
 		OpenLog:         func() { openExplorerSelect(filepath.Join(dir, "airtype.log")) },
 		AutostartSet:    autostart.Set,
@@ -128,9 +125,12 @@ func run(dataDir string) int {
 
 	// 通道互斥且对等：QQ 已绑定只启 QQ；微信 token 在只启微信；
 	// 都未绑定 → 弹通道选择窗口，由用户决定绑哪个。
-	if _, qqBound, err := qqbot.LoadCreds(dir); err != nil {
-		logger.Warn("读取 QQ 凭据失败", "err", err)
-	} else if qqBound {
+	// 凭据文件损坏按"未绑定"处理并告警，避免落入"无通道无入口"死分支。
+	_, qqBound, qqErr := qqbot.LoadCreds(dir)
+	if qqErr != nil {
+		logger.Warn("读取 QQ 凭据失败，按未绑定处理（文件可能损坏）", "err", qqErr)
+	}
+	if qqBound {
 		tray.SetChannelMode(ui.ChannelQQ)
 		if err := a.startQQ(false); err != nil {
 			logger.Error("启动 QQ 机器人失败", "err", err)
@@ -184,6 +184,23 @@ type app struct {
 	qq       *qqbot.Bot
 	qqCancel context.CancelFunc
 	qqDone   chan struct{}
+
+	// switchMu 串行化通道切换（选择/退出登录）：菜单回调在 UI 线程触发，
+	// 停止会话可能等 2 秒兜底，不能卡 UI 线程，故在后台 goroutine 执行。
+	switchMu sync.Mutex
+}
+
+// stopSession 取消会话并等待退出，2 秒兜底（SDK 长轮询退出偶发迟滞）。
+func (a *app) stopSession(cancel context.CancelFunc, done <-chan struct{}, name string) {
+	if cancel == nil {
+		return
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		a.logger.Warn(name + " 未在 2 秒内退出，放弃等待")
+	}
 }
 
 // refreshTrayState 合并微信/QQ 两通道状态决定托盘颜色：
@@ -292,9 +309,30 @@ func (a *app) startBot() error {
 	a.runDone = done
 	go func() {
 		defer close(done)
-		if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			a.logger.Error("bot 运行结束", "err", err)
+		// 与 QQ 通道对齐：微信 Run 异常退出（如开机自启时网络未就绪）
+		// 也按退避自动重试，而不是静默死亡；凭据过期则由 OnState 走重新绑定。
+		backoff := time.Second
+		const maxBackoff = 30 * time.Second
+		for {
+			err := b.Run(ctx)
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			if b.State() == bot.StateSessionExpired {
+				a.logger.Info("微信登录已过期，停止重试（等待重新绑定）")
+				return
+			}
+			a.logger.Error("微信通道异常退出，稍后自动重试", "err", err, "backoff", backoff)
 			a.setWXState(ui.StateDisconnected)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 		}
 	}()
 	return nil
@@ -302,21 +340,14 @@ func (a *app) startBot() error {
 
 func (a *app) stopBot() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.runCancel != nil {
-		a.runCancel()
-		// 兜底：SDK 长轮询退出偶发迟滞，2 秒后放弃等待，避免退出挂死
-		select {
-		case <-a.runDone:
-		case <-time.After(2 * time.Second):
-			a.logger.Warn("bot 未在 2 秒内退出，放弃等待（进程仍将退出）")
-		}
-		a.runCancel = nil
-		a.runDone = nil
-	}
-	if a.b != nil {
-		a.b.Close()
-		a.b = nil
+	cancel, done := a.runCancel, a.runDone
+	b := a.b
+	a.runCancel, a.runDone, a.b = nil, nil, nil
+	a.mu.Unlock()
+	// 等待期间不持锁：healthWatchdog 等仍可访问；重复调用拿到 nil 即快速返回
+	a.stopSession(cancel, done, "微信通道")
+	if b != nil {
+		b.Close()
 	}
 }
 
@@ -388,28 +419,28 @@ func (a *app) startQQ(withBind bool) error {
 // stopQQ 停止 QQ 通道（绑定流程与会话一并取消），2 秒兜底超时。
 func (a *app) stopQQ() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.qqCancel != nil {
-		a.qqCancel()
-		select {
-		case <-a.qqDone:
-		case <-time.After(2 * time.Second):
-			a.logger.Warn("QQ 通道未在 2 秒内退出，放弃等待")
-		}
-		a.qqCancel = nil
-		a.qqDone = nil
-	}
-	if a.qq != nil {
-		a.qq = nil
-	}
+	cancel, done := a.qqCancel, a.qqDone
+	a.qqCancel, a.qqDone, a.qq = nil, nil, nil
+	a.mu.Unlock()
+	a.stopSession(cancel, done, "QQ 通道")
 }
 
 // chooseChannel 通道选择窗口回调：微信/QQ 完全对等，选择后停掉
 // 现有会话进入对应绑定流程（微信弹扫码，QQ 先申请绑定二维码）。
+// 停止会话可能等 2 秒兜底，放后台执行避免卡 UI 线程。
 func (a *app) chooseChannel(c ui.ChannelChoice) {
+	go a.switchChannel(c)
+}
+
+func (a *app) switchChannel(c ui.ChannelChoice) {
+	a.switchMu.Lock()
+	defer a.switchMu.Unlock()
 	a.logger.Info("选择绑定通道", "channel", c.String())
 	a.stopBot()
 	a.stopQQ()
+	// 通道状态归零：避免残留的 Connected 在后续刷新里把托盘"假绿"
+	a.wxState.Store(int32(ui.StateNeedQR))
+	a.qqState.Store(int32(qqbot.StateInit))
 	a.tray.SetState(ui.StateNeedQR)
 	if c == ui.ChoiceQQ {
 		if err := a.startQQ(true); err != nil {
@@ -428,35 +459,61 @@ func (a *app) chooseChannel(c ui.ChannelChoice) {
 	}
 }
 
-// logout 退出登录（按当前绑定的通道清理），回到未绑定状态并弹通道
-// 选择窗口重新选择；换绑的唯一入口。
-// （平台侧的授权关系无公开 API 可删，如需彻底移除请在手机端操作。）
-func (a *app) logout() {
-	if _, qqBound, _ := qqbot.LoadCreds(a.dir); qqBound {
-		a.logger.Info("退出登录（QQ 通道）：停止会话并删除凭据")
-		a.stopQQ()
-		if err := qqbot.ClearCreds(a.dir); err != nil {
-			a.logger.Error("删除 QQ 凭据失败", "err", err)
-		}
-		a.tray.HideQR()
-		a.wxState.Store(int32(ui.StateNeedQR))
-		a.qqState.Store(int32(qqbot.StateInit))
-		a.tray.SetState(ui.StateNeedQR)
-		a.tray.SetChannelMode(ui.ChannelNone)
-		a.tray.NotifyInfo("AirType", "QQ 通道已退出")
-		a.tray.ShowChannelChooser()
+// qrDismissed 用户关掉扫码窗口：QQ 绑定流程取消并回到通道选择；
+// 微信扫码只隐藏窗口（SDK 继续等待，左键托盘可重开二维码）。
+func (a *app) qrDismissed() {
+	a.switchMu.Lock()
+	defer a.switchMu.Unlock()
+	a.mu.Lock()
+	qqActive := a.qq != nil
+	a.mu.Unlock()
+	if !qqActive {
 		return
 	}
-	a.logger.Info("退出登录（微信通道）：停止 bot 并删除本地 token")
-	a.stopBot()
-	if err := os.Remove(filepath.Join(a.dir, "default.json")); err != nil && !os.IsNotExist(err) {
-		a.logger.Error("删除 token 失败", "err", err)
-	}
-	a.tray.HideQR()
+	a.logger.Info("用户关闭扫码窗，取消 QQ 绑定流程")
+	a.stopQQ()
+	a.qqState.Store(int32(qqbot.StateInit))
 	a.tray.SetState(ui.StateNeedQR)
-	a.tray.SetChannelMode(ui.ChannelNone)
-	a.tray.NotifyInfo("AirType", "微信通道已退出")
 	a.tray.ShowChannelChooser()
+}
+
+// logout 退出登录（按当前绑定的通道清理），回到未绑定状态并弹通道
+// 选择窗口重新选择；换绑的唯一入口。后台执行避免卡 UI 线程。
+// （平台侧的授权关系无公开 API 可删，如需彻底移除请在手机端操作。）
+func (a *app) logout() {
+	go func() {
+		a.switchMu.Lock()
+		defer a.switchMu.Unlock()
+		mode := a.tray.CurrentChannelMode()
+		if mode == ui.ChannelNone {
+			// 防御：菜单项在未绑定态本就隐藏；文件判断兜底
+			if _, qqBound, _ := qqbot.LoadCreds(a.dir); qqBound {
+				mode = ui.ChannelQQ
+			} else {
+				mode = ui.ChannelWeChat
+			}
+		}
+		if mode == ui.ChannelQQ {
+			a.logger.Info("退出登录（QQ 通道）：停止会话并删除凭据")
+			a.stopQQ()
+			if err := qqbot.ClearCreds(a.dir); err != nil {
+				a.logger.Error("删除 QQ 凭据失败", "err", err)
+			}
+			a.qqState.Store(int32(qqbot.StateInit))
+		} else {
+			a.logger.Info("退出登录（微信通道）：停止 bot 并删除本地 token")
+			a.stopBot()
+			if err := os.Remove(filepath.Join(a.dir, "default.json")); err != nil && !os.IsNotExist(err) {
+				a.logger.Error("删除 token 失败", "err", err)
+			}
+			a.wxState.Store(int32(ui.StateNeedQR))
+		}
+		a.tray.HideQR()
+		a.tray.SetState(ui.StateNeedQR)
+		a.tray.SetChannelMode(ui.ChannelNone)
+		a.tray.NotifyInfo("AirType", "已退出登录；可重新选择绑定通道")
+		a.tray.ShowChannelChooser()
+	}()
 }
 
 // onWxText 微信通道收信：先做通道健康恢复（黄色巡检态→绿），
@@ -488,7 +545,7 @@ func (a *app) inject(text string) error {
 	// 前台是桌面：无处输入，明确提醒而不是无声丢失
 	if fgTitle == "Program Manager" && strings.HasSuffix(strings.ToLower(fgExe), "explorer.exe") {
 		a.logger.Warn("前台是桌面，无输入框，跳过注入", "text已入历史", true)
-		a.tray.NotifyInfo("AirType", "当前前台是桌面，没有可输入的地方；请把焦点切到输入框后，从历史弹窗单击重发")
+		a.tray.NotifyInfo("AirType", "当前前台是桌面，没有可输入的地方；消息已存入历史，可左键托盘打开历史复制")
 		return nil
 	}
 	start := time.Now()
@@ -513,13 +570,21 @@ func (a *app) inject(text string) error {
 	return nil
 }
 
+// stats 汇总两个通道的收信/去重计数（任一在跑即计入）。
 func (a *app) stats() (received, dropped int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.b != nil {
-		return a.b.Stats()
+		r, d := a.b.Stats()
+		received += r
+		dropped += d
 	}
-	return 0, 0
+	if a.qq != nil {
+		r, d := a.qq.Stats()
+		received += r
+		dropped += d
+	}
+	return received, dropped
 }
 
 func openExplorerSelect(path string) {

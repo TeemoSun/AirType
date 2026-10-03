@@ -56,6 +56,10 @@ func Save(dir string, s Settings) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil { // 断电安全：改名前刷盘
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}

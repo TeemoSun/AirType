@@ -17,7 +17,12 @@ jobs:
           go-version: 'stable'
       - name: Test
         run: go test ./...
-      # .syso（图标/manifest）已提交在各 cmd 目录，go build 自动嵌入
+      # PE 版本资源从 tag 现算（仓库里提交的 .syso 是开发版，版本号固定 1.0.0.0）
+      - name: Generate version resources from tag
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}" -replace '^v',''
+          go run github.com/tc-hib/go-winres@v0.1.1 make --in winres/winres.json --out cmd/airtype/rsrc --file-version $v --product-version $v
       - name: Build AirType.exe
         env:
           CGO_ENABLED: '0'
@@ -25,8 +30,14 @@ jobs:
           go build -trimpath
           -ldflags "-H windowsgui -s -w -X main.version=${{ github.ref_name }}"
           -o AirType.exe ./cmd/airtype
+      - name: Checksum
+        shell: pwsh
+        run: |
+          (Get-FileHash AirType.exe -Algorithm SHA256).Hash.ToLower() + "  AirType.exe" | Out-File -Encoding ascii AirType.exe.sha256
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: AirType.exe
+          files: |
+            AirType.exe
+            AirType.exe.sha256
           generate_release_notes: true

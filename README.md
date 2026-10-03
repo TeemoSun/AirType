@@ -113,7 +113,7 @@ scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检�
 - [x] **v1.0** 控制台 MVP：扫码绑定、实时注入、token 持久化
 - [x] **v1.1** 托盘常驻：多态图标、扫码 GUI 化、暂停打字、自动回车、开机自启、QQ 通道
 - [x] **历史弹窗**：Fluent 圆角弹窗、复制 / 删除 / 重新打字、键盘导航、深色模式、彩色 emoji
-- [ ] **下一版本**：QQ 网关断线治理（空闲超时 + RESUME）、DPAPI 凭据加密、UI 全面重构、CI/版本工程化（本批已合入 main）
+- [x] **v1.2** 质量与体验大版本：QQ 网关断线治理（空闲超时 + RESUME）、DPAPI 凭据加密、UI 全面重构、CI/版本工程化
 - [x] **v1.2** QQ 通道：微信/QQ 完全对等二选一、通道选择窗口、扫码绑定 QQ 官方机器人（WebSocket）；自动回车、托盘图标守护、网络抖动优化
 
 ## ⚠️ 免责声明
@@ -271,8 +271,9 @@ Full design docs (in Chinese): [docs/开发方案.md](docs/开发方案.md).
   autostart, QQ channel with channel chooser
 - [x] **history popup** — Fluent rounded popup, copy/delete/retype, keyboard
   navigation, dark mode, color emoji
-- [ ] **next release** — QQ gateway disconnect hardening (idle timeout + RESUME),
-  DPAPI credential sealing, full UI overhaul, CI/versioning engineering (merged to main)
+- [x] **v1.2** quality & experience release — QQ gateway disconnect hardening
+  (idle timeout + RESUME), DPAPI credential sealing, full UI overhaul,
+  CI/versioning engineering
 
 ## ⚠️ Disclaimer
 

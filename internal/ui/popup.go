@@ -74,7 +74,6 @@ type historyPopup struct {
 	snapshot  win.FocusSnapshot
 	statusLbl *walk.Label // 状态点 ●
 	statusTxt *walk.Label // 状态文字（含"已暂停/新消息"闪现）
-	closeBtn  *walk.CustomWidget
 
 	flashMsg     string
 	flashUntil   time.Time
@@ -96,7 +95,6 @@ func (t *Tray) ensureHistoryPopup() {
 	p := &historyPopup{tray: t}
 	var w *walk.MainWindow
 	var status, statusText *walk.Label
-	var closeBtn *walk.CustomWidget
 	var listHost *walk.Composite
 
 	err := MainWindow{
@@ -111,21 +109,15 @@ func (t *Tray) ensureHistoryPopup() {
 			}
 		},
 		Children: []Widget{
-			// 标题行：产品名 + 状态点 + 状态文字 + 关闭按钮
+			// 标题行：产品名 + 状态点 + 状态文字（关闭走 Esc/失焦，不放关闭按钮）
 			Composite{
 				Background: SolidColorBrush{Color: pal.Window},
-				Layout:     HBox{Margins: Margins{Left: 20, Top: 14, Right: 10, Bottom: 8}, Spacing: 6},
+				Layout:     HBox{Margins: Margins{Left: 20, Top: 14, Right: 20, Bottom: 8}, Spacing: 6},
 				Children: []Widget{
 					Label{Text: "AirType", Font: Font{Family: "Segoe UI", PointSize: 14, Bold: true}, TextColor: pal.Text},
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					Label{AssignTo: &statusText, Text: "未绑定", TextColor: pal.TextSecondary},
 					HSpacer{},
-					CustomWidget{
-						AssignTo: &closeBtn,
-						Paint:    func(canvas *walk.Canvas, bounds walk.Rectangle) error { return paintCloseButton(canvas, bounds, pal) },
-						MinSize:  Size{Width: 34, Height: 28},
-						MaxSize:  Size{Width: 34, Height: 28},
-					},
 				},
 			},
 			// 列表宿主：自绘 Fluent 列表挂到这里；StretchFactor=1 占满
@@ -165,12 +157,6 @@ func (t *Tray) ensureHistoryPopup() {
 		return
 	}
 	p.list = fl
-	p.closeBtn = closeBtn
-	closeBtn.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
-		if button == walk.LeftButton {
-			p.hide()
-		}
-	})
 
 	t.popup = p
 	t.popupDark = dark
@@ -779,29 +765,4 @@ func (fl *fluentList) emptyText() string {
 	default:
 		return "暂无消息，绑定通道后用手机发一条试试"
 	}
-}
-
-// paintCloseButton 自绘右上角 ✕（无边框窗口没有系统关闭键）。
-// 先铺主题底色：自绘控件默认白底擦除，深色主题下会留一条白带。
-func paintCloseButton(canvas *walk.Canvas, b walk.Rectangle, pal Palette) error {
-	bg, err := walk.NewSolidColorBrush(pal.Window)
-	if err == nil {
-		defer bg.Dispose()
-		if err := canvas.FillRectanglePixels(bg, b); err != nil {
-			return err
-		}
-	}
-	pen, err := walk.NewCosmeticPen(walk.PenSolid, pal.TextSecondary)
-	if err != nil {
-		return err
-	}
-	defer pen.Dispose()
-	cx, cy := b.X+b.Width/2, b.Y+b.Height/2
-	d := 4
-	if err := canvas.DrawLinePixels(pen,
-		walk.Point{X: cx - d, Y: cy - d}, walk.Point{X: cx + d, Y: cy + d}); err != nil {
-		return err
-	}
-	return canvas.DrawLinePixels(pen,
-		walk.Point{X: cx - d, Y: cy + d}, walk.Point{X: cx + d, Y: cy - d})
 }

@@ -37,7 +37,7 @@ flowchart LR
 - **系统级打字**：Win32 `SendInput` 注入，中文、Emoji 直接上屏，不依赖输入法，任何能接收键盘的窗口都生效
 - **微信 / QQ 双通道可选**：微信或 QQ 二选一（互斥、完全对等）。未绑定时弹出通道选择窗口，扫码即绑定；QQ 走官方机器人（WebSocket 实时推送 + 断线自动恢复会话），手机 QQ 发私聊同样隔空打字。换绑：托盘菜单"切换通道…"→ 回到选择窗口
 - **常驻托盘**：四态图标一眼看清状态（绿=正常 / 灰=未绑定 / 黄=待扫码或异常 / 红=凭据失效），无需控制台窗口
-- **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出；单击复制（行内"已复制"反馈）、右键复制 / 删除 / 重新打字、悬停看全文、键盘 ↑↓/Enter/Delete、迷你滚动条、失焦或 ✕ 关闭
+- **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出；单击复制（行内"已复制"反馈）、右键复制 / 删除 / 重新打字、悬停看全文、键盘 ↑↓/Enter/Delete、迷你滚动条、失焦或 Esc 关闭
 - **彩色 emoji**：消息行 DirectWrite 渲染，😀🚀 与手机端同观感
 - **深色模式**：自动跟随系统深浅色（含弹窗、窗口标题栏）
 - **暂停打字 / 自动回车**：只记录不注入、打完自动补回车发送；都是托盘菜单开关，重启后记住状态
@@ -67,7 +67,7 @@ flowchart LR
 | 🔴 | 登录失效 | 凭据过期或被平台侧移除，需重新扫码绑定 |
 
 - **左键托盘**：未绑定时弹通道选择窗口；待扫码时弹二维码；已绑定时弹出历史消息弹窗（再点一次收起）
-- **历史弹窗**：单击条目复制（行内反馈），右键可复制 / 删除 / 重新打字，点窗口外或 ✕ 关闭，键盘 ↑↓ 导航
+- **历史弹窗**：单击条目复制（行内反馈），右键可复制 / 删除 / 重新打字，点窗口外或 Esc 关闭，键盘 ↑↓ 导航
 - **右键菜单**：查看历史 / 暂停打字 / 自动回车 ‖ 切换通道… ‖ 打开日志 / 清空历史 ‖ 开关机自启 ‖ 退出（绑定/换绑统一走通道选择窗口，菜单不含绑定项）
 
 ## ⚠️ 注意事项
@@ -177,7 +177,7 @@ WeChat and your PC has internet, it works from anywhere.
   yellow = needs attention, red = credentials expired), no console window
 - **History popup** — Fluent-style rounded popup from a tray click: copy on click
   (inline "copied" feedback), right-click for copy / delete / retype, full text
-  on hover, keyboard navigation, mini scrollbar, closes on focus loss or ✕
+  on hover, keyboard navigation, mini scrollbar, closes on focus loss or Esc
 - **Color emoji** — message rows rendered with DirectWrite, 😀🚀 look like they do on your phone
 - **Dark mode** — follows the system light/dark theme automatically
 - **Pause typing / Auto-Enter** — record-only mode and send-after-typing; both are
@@ -213,7 +213,7 @@ Data (token, history, logs) lives in `%LOCALAPPDATA%\AirType\`; override with `-
 - **Left-click the tray**: chooser when unbound; QR window while pairing;
   otherwise toggles the history popup
 - **History popup**: click an entry to copy (inline feedback), right-click for
-  copy / delete / retype, closes on focus loss or ✕, ↑↓/Enter/Delete keys work
+  copy / delete / retype, closes on focus loss or Esc, ↑↓/Enter/Delete keys work
 - **Right-click menu**: history / pause / auto-enter ‖ switch channel… ‖ open log /
   clear history ‖ autostart ‖ exit (binding & switching go through the channel chooser, not the menu)
 

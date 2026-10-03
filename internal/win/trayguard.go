@@ -44,7 +44,12 @@ var (
 // 每条消息先链回原窗口过程（walk 自己也要在 TaskbarCreated 里做重挂），
 // 之后再回调宿主逻辑，保证宿主看到的是 walk 处理后的最终状态。
 // 回调发生在 UI 线程（窗口过程天然如此），可直接操作窗口控件。
-func SubclassTrayGuard(hwnd uintptr, onTaskbarCreated, onWake func()) error {
+//
+// onTrace 可为 nil；否则在链回原窗口过程之前，对每条到达的消息调用一次，
+// 供宿主记录销毁类消息（WM_CLOSE/WM_DESTROY 等）的到达时刻——用于追查
+// "窗口被外部销毁导致托盘僵尸"类问题（销毁发生在 GetMessage 内部派发的
+// 发送型消息里时，事后无从取证）。
+func SubclassTrayGuard(hwnd uintptr, onTaskbarCreated, onWake func(), onTrace func(msg uint32)) error {
 	if hwnd == 0 {
 		return fmt.Errorf("win: SubclassTrayGuard: hwnd 为空")
 	}
@@ -52,6 +57,9 @@ func SubclassTrayGuard(hwnd uintptr, onTaskbarCreated, onWake func()) error {
 		return nil // 已安装
 	}
 	cb := syscall.NewCallback(func(h uintptr, msg uint32, wp, lp uintptr) uintptr {
+		if onTrace != nil {
+			onTrace(msg)
+		}
 		ret, _, _ := pCallWindowProcW.Call(guardOrigProc, h, uintptr(msg), wp, lp)
 		switch msg {
 		case taskbarCreatedMsg:

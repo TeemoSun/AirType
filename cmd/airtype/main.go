@@ -67,7 +67,11 @@ func run(dataDir string) int {
 		logger.Error("单实例检查失败", "err", err)
 		// 唤醒已在运行的实例：重建托盘图标并弹提示。
 		// 之前"安静退出"会让用户误以为没启动（尤其图标意外丢失时），双击反而成了找回图标的手势。
-		win.WakeRunningInstance()
+		// 命名事件优先（不受 UIPI 完整性限制，提权实例也能被普通双击唤醒）；
+		// 事件不存在（旧版本实例）才退回窗口广播，避免双触发弹两个气泡。
+		if !win.SignalWake() {
+			win.WakeRunningInstance()
+		}
 		return 0 // 已有实例在跑，本进程退出
 	}
 
@@ -118,6 +122,12 @@ func run(dataDir string) int {
 	a.tray = tray
 	hist.OnChange(tray.HistoryChanged)
 
+	// 窗口看门狗：主窗口被外部销毁而消息循环卡死时（walk 循环条件的复查
+	// 盲区），让其干净退出释放单实例锁，而不是僵尸常驻占锁。done 在消息
+	// 循环正常返回后关闭，避免看门狗在正常退出竞态里误报。
+	watchdogDone := make(chan struct{})
+	tray.StartWatchdog(watchdogDone)
+
 	logger.Info("AirType 启动", "version", version, "datadir", dir)
 
 	// 健康巡检：已连接但长时间收不到消息 → 黄色（网络/通道异常自检，方案 §7）
@@ -147,6 +157,7 @@ func run(dataDir string) int {
 
 	// 阻塞至托盘退出
 	tray.Run()
+	close(watchdogDone)
 
 	a.appCancel()
 	a.stopBot()

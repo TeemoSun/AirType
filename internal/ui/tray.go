@@ -122,6 +122,9 @@ type Tray struct {
 	qrHintLbl  *walk.Label
 	qrShown    bool
 
+	// uiThreadID 是创建主窗口（消息循环）的线程 ID，看门狗用它投递 WM_QUIT。
+	uiThreadID uint32
+
 	// 各惰性窗口创建时的深浅色；不一致时销毁重建，跟随系统主题切换。
 	chooserDark, qrDark, popupDark bool
 }
@@ -159,11 +162,75 @@ func NewTray(cfg Config) (*Tray, error) {
 	// 托盘守护：walk 在 TaskbarCreated 后只以隐藏态重挂图标（实际仍不可见），
 	// 且没有 NIM_ADD 级的公开恢复接口，图标一旦从托盘丢失便找不回来。
 	// 这里子类化主窗口：任务栏重建或二次实例唤醒广播时，销毁重建图标。
-	if err := win.SubclassTrayGuard(uintptr(t.mw.Handle()), t.onTaskbarRecreated, t.onWakeFromSecondInstance); err != nil {
+	// onTrace 记录销毁类消息的到达：窗口若被外部 SendMessage 销毁（销毁发生
+	// 在 GetMessage 内部派发的发送型消息里，事后无法取证），至少留下时间线。
+	if err := win.SubclassTrayGuard(uintptr(t.mw.Handle()), t.onTaskbarRecreated, t.onWakeFromSecondInstance, t.traceDestructiveMsg); err != nil {
 		t.cfg.Logger.Warn("安装托盘守护失败（不影响其余功能）", "err", err)
+	}
+	t.uiThreadID = win.CurrentThreadID()
+
+	// 唤醒事件：命名内核对象，不受 UIPI 完整性级别限制（提权实例也能被
+	// 普通权限的二次实例唤醒），也不依赖窗口存在（广播方案的盲区）。
+	if wakeCh, err := win.ListenWake(); err == nil {
+		go func() {
+			for range wakeCh {
+				t.mw.Synchronize(t.onWakeFromSecondInstance)
+			}
+		}()
+	} else {
+		t.cfg.Logger.Warn("创建唤醒事件失败（二次实例唤醒退回窗口广播）", "err", err)
 	}
 
 	return t, nil
+}
+
+// traceDestructiveMsg 记录可能销毁主窗口的消息（须轻量：运行在 UI 线程的
+// 窗口过程里）。taskbarCreated/wake 两类由各自回调记录，这里不重复。
+func (t *Tray) traceDestructiveMsg(msg uint32) {
+	switch msg {
+	case 0x0002 /*WM_DESTROY*/, 0x0010 /*WM_CLOSE*/, 0x0011, /*WM_QUERYENDSESSION*/
+		0x0016 /*WM_ENDSESSION*/, 0x0082, /*WM_NCDESTROY*/
+		0x001A /*WM_SETTINGCHANGE*/, 0x031E /*WM_THEMECHANGED*/ :
+		t.cfg.Logger.Info("托盘主窗口收到窗口消息", "msg", fmt.Sprintf("0x%04X", msg))
+	}
+}
+
+// StartWatchdog 窗口看门狗：每 2 秒向主窗口投递一条 WM_NULL，强制 walk 的
+// 消息循环醒来复查 `fb.hWnd != 0` 退出条件——该条件只在取到投递型消息后
+// 复查，若窗口被销毁于 GetMessage 内部派发的发送型消息里（外部 SendMessage
+// 触发 WM_CLOSE 等），循环会永久阻塞成"无窗口僵尸"：进程活着、托盘没了、
+// 单实例互斥量释放不掉，后续双击被拦且唤醒广播无窗口可收。
+// Ping 失败（窗口已销毁）时向 UI 线程投递 WM_QUIT 走干净退出；300ms 宽限
+// 是为了让正常退出路径（Run 返回后 close(done)）不产生误报。
+// 必须在 NewTray 之后、Run 之前调用一次。
+func (t *Tray) StartWatchdog(done <-chan struct{}) {
+	hwnd := uintptr(t.mw.Handle())
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if win.PingWindow(hwnd) && win.IsWindow(hwnd) {
+					continue
+				}
+				time.Sleep(300 * time.Millisecond) // 与正常退出路径的收尾竞态让路
+				select {
+				case <-done:
+					return
+				default:
+				}
+				if win.IsWindow(hwnd) {
+					continue // 窗口重建等罕见竞态，继续观察
+				}
+				t.cfg.Logger.Error("主窗口已销毁但消息循环未退出（僵尸态），请求干净退出并释放单实例锁")
+				win.PostQuitToThread(t.uiThreadID)
+				return
+			}
+		}
+	}()
 }
 
 // attachTrayClick 挂接托盘左键单击行为（图标重建后需对新图标重挂）。

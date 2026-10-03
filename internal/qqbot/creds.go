@@ -1,5 +1,3 @@
-//go:build windows
-
 // Package qqbot 对接 QQ 开放平台机器人：扫码绑定（q.qq.com lite 绑定接口）、
 // access token 管理、WebSocket 网关收信（C2C 私聊消息）。
 //

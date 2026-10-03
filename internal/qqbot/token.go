@@ -1,5 +1,3 @@
-//go:build windows
-
 package qqbot
 
 import (
@@ -25,7 +23,8 @@ func newTokenSource(appID, clientSecret string) *tokenSource {
 	return &tokenSource{appID: appID, clientSecret: clientSecret}
 }
 
-const (
+// tokenURL / gatewayAPIURL 为 var 供测试替换为 httptest 服务。
+var (
 	tokenURL      = "https://bots.qq.com/app/getAppAccessToken"
 	gatewayAPIURL = "https://api.sgroup.qq.com/gateway"
 )

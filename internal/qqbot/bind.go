@@ -1,5 +1,3 @@
-//go:build windows
-
 package qqbot
 
 import (
@@ -35,8 +33,6 @@ const bindTimeout = 10 * time.Second
 type bindStatus int
 
 const (
-	bindNone      bindStatus = 0
-	bindPending   bindStatus = 1
 	bindCompleted bindStatus = 2
 	bindExpired   bindStatus = 3
 )

@@ -1,5 +1,3 @@
-//go:build windows
-
 package qqbot
 
 import (
@@ -62,7 +60,12 @@ type Bot struct {
 	opts   Options
 	tokens *tokenSource
 	dedup  *deduper
-	seqCh  chan int64 // 心跳协程读取最新事件序号
+	// openid 是绑定者的 user_openid，用于过滤非绑定者发来的消息（安全边界）。
+	// 为空（旧版凭据文件）时不拦截，仅记录一条警告。
+	openid string
+	// resume 保存上一条会话的可恢复状态，供断线重连时 RESUME。
+	// 只在 Run 的串行循环（runGateway 及其同 goroutine 的 handleDispatch）里读写。
+	resume *resumeState
 
 	mu           sync.Mutex
 	state        State
@@ -79,13 +82,24 @@ func New(opts Options) (*Bot, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	b := &Bot{opts: opts, dedup: newDeduper(500), seqCh: make(chan int64, 1)}
+	b := &Bot{opts: opts, dedup: newDeduper(500)}
 	if creds, ok, err := LoadCreds(opts.DataDir); err != nil {
 		return nil, fmt.Errorf("qqbot: 读取凭据失败: %w", err)
 	} else if ok {
 		b.tokens = newTokenSource(creds.AppID, creds.AppSecret)
+		b.openid = creds.UserOpenid
+		if b.openid == "" {
+			opts.Logger.Warn("qqbot: 凭据缺少绑定者 openid，暂不过滤消息来源（建议重新扫码绑定）")
+		}
 	}
 	return b, nil
+}
+
+// hashOpenid 生成 openid 的短哈希：日志排障够用，避免完整伪匿名 ID 落盘。
+func hashOpenid(s string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return fmt.Sprintf("%08x", h.Sum64())
 }
 
 func httpClient() *http.Client {
@@ -159,7 +173,7 @@ func (b *Bot) Bound() bool {
 }
 
 // Run 阻塞运行：未绑定时返回 ErrNotBound；已绑定则维持网关会话，
-// 断开后按指数退避重连（封顶 60s），直到 ctx 取消。
+// 断开后按指数退避重连（封顶 60s；会话曾稳定运行则退避复位），直到 ctx 取消。
 func (b *Bot) Run(ctx context.Context) error {
 	if b.tokens == nil {
 		return ErrNotBound
@@ -175,6 +189,10 @@ func (b *Bot) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// 会话稳定存活过后才断开：属偶发断线，退避从头起步
+		if exit.uptime >= stableSession {
+			backoff = time.Second
+		}
 		b.setState(StateDisconnected)
 		if exit.authFailed {
 			// 4004 大多是 token 缓存与服务端失配；刷新后立即重试一次
@@ -187,7 +205,8 @@ func (b *Bot) Run(ctx context.Context) error {
 			backoff = 2 * time.Second
 			continue
 		}
-		b.opts.Logger.Warn("qqbot: 网关会话结束，准备重连", "err", exit.err, "backoff", backoff)
+		b.opts.Logger.Warn("qqbot: 网关会话结束，准备重连",
+			"err", exit.err, "uptime", exit.uptime.Round(time.Second), "backoff", backoff)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

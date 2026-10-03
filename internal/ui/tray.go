@@ -45,6 +45,15 @@ func (s TrayState) String() string {
 	}
 }
 
+// ChannelMode 是当前绑定的消息通道（互斥：同时只能有一个）。
+type ChannelMode int
+
+const (
+	ChannelNone   ChannelMode = iota // 未绑定（可任选微信或 QQ）
+	ChannelWeChat                    // 微信通道
+	ChannelQQ                        // QQ 通道
+)
+
 // Config 是 Tray 依赖的业务回调。
 type Config struct {
 	Logger *slog.Logger
@@ -82,6 +91,10 @@ type Tray struct {
 
 	pauseAction  *walk.Action
 	autoEnter    *walk.Action
+	rescanAction *walk.Action
+	bindQQAction *walk.Action
+	logoutAction *walk.Action
+	mode         ChannelMode
 	state        TrayState
 	paused       bool
 	lastReceived time.Time
@@ -225,6 +238,7 @@ func (t *Tray) buildMenu() {
 		}
 	})
 	menu.Actions().Add(rescan)
+	t.rescanAction = rescan
 
 	bindQQ := walk.NewAction()
 	bindQQ.SetText("绑定 QQ 机器人")
@@ -234,6 +248,7 @@ func (t *Tray) buildMenu() {
 		}
 	})
 	menu.Actions().Add(bindQQ)
+	t.bindQQAction = bindQQ
 
 	logout := walk.NewAction()
 	logout.SetText("退出登录")
@@ -243,6 +258,8 @@ func (t *Tray) buildMenu() {
 		}
 	})
 	menu.Actions().Add(logout)
+	t.logoutAction = logout
+	t.applyChannelMode() // 初始 ChannelNone
 
 	openLog := walk.NewAction()
 	openLog.SetText("打开日志")
@@ -294,6 +311,41 @@ func (t *Tray) buildMenu() {
 		t.mw.Close()
 	})
 	menu.Actions().Add(quit)
+}
+
+// SetChannelMode 切换通道模式并按模式显隐菜单项（线程安全）：
+//
+//	未绑定：显示"扫码绑定微信"与"绑定 QQ"，隐藏"退出登录"
+//	微信：  "重新扫码"可见，QQ 绑定隐藏（换绑需先退出登录）
+//	QQ：    "绑定 QQ"可见（重绑本通道），微信扫码隐藏
+func (t *Tray) SetChannelMode(m ChannelMode) {
+	t.mw.Synchronize(func() {
+		t.mode = m
+		t.applyChannelMode()
+	})
+}
+
+// applyChannelMode 按当前模式刷新菜单项文字与可见性（须在 UI 线程调用）。
+func (t *Tray) applyChannelMode() {
+	if t.rescanAction == nil {
+		return
+	}
+	switch t.mode {
+	case ChannelNone:
+		_ = t.rescanAction.SetText("扫码绑定微信")
+		_ = t.rescanAction.SetVisible(true)
+		_ = t.bindQQAction.SetVisible(true)
+		_ = t.logoutAction.SetVisible(false)
+	case ChannelWeChat:
+		_ = t.rescanAction.SetText("重新扫码")
+		_ = t.rescanAction.SetVisible(true)
+		_ = t.bindQQAction.SetVisible(false)
+		_ = t.logoutAction.SetVisible(true)
+	case ChannelQQ:
+		_ = t.rescanAction.SetVisible(false)
+		_ = t.bindQQAction.SetVisible(true)
+		_ = t.logoutAction.SetVisible(true)
+	}
 }
 
 // toggleAutoEnterMenu 处理"自动回车"菜单点击：回调业务层切换，

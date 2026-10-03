@@ -127,14 +127,26 @@ func run(dataDir string) int {
 	// 健康巡检：已连接但长时间收不到消息 → 黄色（网络/通道异常自检，方案 §7）
 	go healthWatchdog(a.appCtx, a)
 
-	if err := a.startBot(); err != nil {
-		logger.Error("启动 bot 失败", "err", err)
-		tray.NotifyError("AirType", "启动失败："+err.Error())
-	}
-
-	// 已绑定过 QQ 机器人则并行启动 QQ 通道
-	if err := a.startQQ(false); err != nil && !errors.Is(err, qqbot.ErrNotBound) {
-		logger.Error("启动 QQ 机器人失败", "err", err)
+	// 通道互斥：QQ 已绑定 → 只启动 QQ；否则走微信（含首启扫码）。
+	if _, qqBound, err := qqbot.LoadCreds(dir); err != nil {
+		logger.Warn("读取 QQ 凭据失败", "err", err)
+	} else if qqBound {
+		tray.SetChannelMode(ui.ChannelQQ)
+		if err := a.startQQ(false); err != nil {
+			logger.Error("启动 QQ 机器人失败", "err", err)
+			tray.NotifyError("AirType", "QQ 通道启动失败："+err.Error())
+		}
+	} else {
+		// 有微信 token = 已绑定微信；没有 = 未绑定（可任选通道）
+		if _, err := os.Stat(filepath.Join(dir, "default.json")); err == nil {
+			tray.SetChannelMode(ui.ChannelWeChat)
+		} else {
+			tray.SetChannelMode(ui.ChannelNone)
+		}
+		if err := a.startBot(); err != nil {
+			logger.Error("启动 bot 失败", "err", err)
+			tray.NotifyError("AirType", "启动失败："+err.Error())
+		}
 	}
 
 	// 阻塞至托盘退出
@@ -258,6 +270,7 @@ func (a *app) startBot() error {
 			switch s {
 			case bot.StateConnected:
 				a.setWXState(ui.StateConnected)
+				a.tray.SetChannelMode(ui.ChannelWeChat) // 扫码成功即锁定微信通道
 				a.tray.HideQR()
 			case bot.StateSessionExpired:
 				a.setWXState(ui.StateNeedQR) // 红：登录过期，需重新扫码
@@ -321,6 +334,12 @@ func (a *app) startQQ(withBind bool) error {
 				"用手机 QQ 扫描下方二维码，确认后电脑端自动连接", u)
 		},
 		OnBound: func(appID string) {
+			// 通道互斥：QQ 绑定成功即清理微信 token，锁定 QQ 通道
+			if err := os.Remove(filepath.Join(a.dir, "default.json")); err != nil && !os.IsNotExist(err) {
+				a.logger.Warn("清理微信 token 失败", "err", err)
+			}
+			a.wxState.Store(int32(ui.StateNeedQR))
+			a.tray.SetChannelMode(ui.ChannelQQ)
 			a.tray.HideQR()
 			a.tray.NotifyInfo("AirType", "QQ 机器人绑定成功（AppID "+appID+"），正在连接…")
 		},
@@ -377,14 +396,28 @@ func (a *app) stopQQ() {
 	}
 }
 
-// bindQQ 托盘"绑定 QQ 机器人"入口：停旧会话，弹二维码走绑定流程。
+// bindQQ 托盘"绑定 QQ 机器人"入口。通道互斥：微信已登录时拒绝
+// （换绑需先"退出登录"）；QQ 已绑定时为同通道重绑。绑定成功即
+// 停用微信通道并清理其 token。
 func (a *app) bindQQ() {
+	if _, wxTokenErr := os.Stat(filepath.Join(a.dir, "default.json")); wxTokenErr == nil && a.wxLoggedIn() {
+		a.tray.NotifyInfo("AirType", "当前已登录微信通道；换绑请先\"退出登录\"")
+		return
+	}
 	a.logger.Info("开始绑定 QQ 机器人")
+	a.stopBot() // 未登录微信时仅停轮询，避免二维码期间无谓请求
 	a.stopQQ()
 	if err := a.startQQ(true); err != nil {
 		a.logger.Error("启动 QQ 绑定流程失败", "err", err)
 		a.tray.NotifyError("AirType", "QQ 绑定启动失败："+err.Error())
 	}
+}
+
+// wxLoggedIn 报告微信 bot 当前是否处于已登录（连接/断开）状态。
+func (a *app) wxLoggedIn() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.b != nil && a.b.State() != bot.StateInit && a.b.State() != bot.StateSessionExpired
 }
 
 // rescan 停止 bot、删除 token、重启走扫码流程。
@@ -401,18 +434,33 @@ func (a *app) rescan() {
 	}
 }
 
-// logout 退出登录：停止 bot 并删除本地 token，回到未扫码状态。
-// 不自动弹二维码；之后可通过"重新扫码"或重启程序重新绑定。
-// （微信端 Bot 的授权关系无公开 API 可删，如需彻底移除请在手机微信里操作。）
+// logout 退出登录（按当前绑定的通道清理），回到未绑定状态，
+// 之后可任选微信或 QQ 重新绑定。
+// （平台侧的授权关系无公开 API 可删，如需彻底移除请在手机端操作。）
 func (a *app) logout() {
-	a.logger.Info("退出登录：停止 bot 并删除本地 token")
+	if _, qqBound, _ := qqbot.LoadCreds(a.dir); qqBound {
+		a.logger.Info("退出登录（QQ 通道）：停止会话并删除凭据")
+		a.stopQQ()
+		if err := qqbot.ClearCreds(a.dir); err != nil {
+			a.logger.Error("删除 QQ 凭据失败", "err", err)
+		}
+		a.tray.HideQR()
+		a.wxState.Store(int32(ui.StateNeedQR))
+		a.qqState.Store(int32(qqbot.StateInit))
+		a.tray.SetState(ui.StateNeedQR)
+		a.tray.SetChannelMode(ui.ChannelNone)
+		a.tray.NotifyInfo("AirType", "QQ 通道已退出；可重新绑定 QQ 或微信")
+		return
+	}
+	a.logger.Info("退出登录（微信通道）：停止 bot 并删除本地 token")
 	a.stopBot()
 	if err := os.Remove(filepath.Join(a.dir, "default.json")); err != nil && !os.IsNotExist(err) {
 		a.logger.Error("删除 token 失败", "err", err)
 	}
 	a.tray.HideQR()
 	a.tray.SetState(ui.StateNeedQR)
-	a.tray.NotifyInfo("AirType", "已退出登录；需要时可通过\"重新扫码\"重新绑定")
+	a.tray.SetChannelMode(ui.ChannelNone)
+	a.tray.NotifyInfo("AirType", "微信通道已退出；可扫码绑定微信或 QQ")
 }
 
 // onWxText 微信通道收信：先做通道健康恢复（黄色巡检态→绿），

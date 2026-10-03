@@ -202,19 +202,22 @@ func (a *app) stopSession(cancel context.CancelFunc, done <-chan struct{}, name 
 }
 
 // refreshTrayState 合并微信/QQ 两通道状态决定托盘颜色：
-// 任一通道已连接即绿（至少一个通道可用）；否则任一通道异常/断连即黄；
-// 都未登录则红。微信的看门狗黄/收信恢复绿也走这里。
+// 任一凭据失效 → 红；任一已连接 → 绿；待扫码/异常/断连 → 黄；都未启动 → 灰。
 func (a *app) refreshTrayState() {
 	wx := ui.TrayState(a.wxState.Load())
 	qq := qqbot.State(a.qqState.Load())
 	switch {
+	case wx == ui.StateError, qq == qqbot.StateSessionExpired:
+		a.tray.SetState(ui.StateError)
 	case wx == ui.StateConnected || qq == qqbot.StateConnected:
 		a.tray.SetState(ui.StateConnected)
-	case wx == ui.StateWarning || wx == ui.StateDisconnected,
-		qq == qqbot.StateDisconnected || qq == qqbot.StateSessionExpired:
+	case wx == ui.StateNeedQR:
+		a.tray.SetState(ui.StateNeedQR)
+	case wx == ui.StateWarning, wx == ui.StateDisconnected,
+		qq == qqbot.StateDisconnected:
 		a.tray.SetState(ui.StateWarning)
 	default:
-		a.tray.SetState(ui.StateNeedQR)
+		a.tray.SetState(ui.StateIdle)
 	}
 }
 
@@ -277,6 +280,7 @@ func (a *app) startBot() error {
 		Logger:  a.logger,
 		OnText:  a.onWxText,
 		OnQRCode: func(imageURL string) {
+			a.setWXState(ui.StateNeedQR) // 黄：绑定中
 			a.tray.ShowQR(imageURL)
 		},
 		OnState: func(s bot.State) {
@@ -287,7 +291,7 @@ func (a *app) startBot() error {
 				a.tray.HideQR()
 			case bot.StateSessionExpired:
 				// 过期不自动重弹微信二维码：回到通道选择窗口重新选择
-				a.setWXState(ui.StateNeedQR)
+				a.setWXState(ui.StateError) // 红：凭据失效
 				a.tray.SetChannelMode(ui.ChannelNone)
 				a.tray.ShowChannelChooser()
 				a.tray.NotifyInfo("AirType", "微信登录已过期；请重新选择通道绑定")
@@ -361,6 +365,7 @@ func (a *app) startQQ(withBind bool) error {
 			a.refreshTrayState()
 		},
 		OnQRCode: func(u string) {
+			a.tray.SetState(ui.StateNeedQR) // 黄：绑定中
 			a.tray.ShowQRWindow("扫码绑定 QQ 机器人",
 				"用手机 QQ 扫描下方二维码，确认后电脑端自动连接", u)
 		},
@@ -369,7 +374,7 @@ func (a *app) startQQ(withBind bool) error {
 			if err := os.Remove(filepath.Join(a.dir, "default.json")); err != nil && !os.IsNotExist(err) {
 				a.logger.Warn("清理微信 token 失败", "err", err)
 			}
-			a.wxState.Store(int32(ui.StateNeedQR))
+			a.wxState.Store(int32(ui.StateIdle))
 			a.tray.SetChannelMode(ui.ChannelQQ)
 			a.tray.HideQR()
 			a.tray.NotifyInfo("AirType", "QQ 机器人绑定成功（AppID "+appID+"），正在连接…")
@@ -403,7 +408,7 @@ func (a *app) startQQ(withBind bool) error {
 				// 凭据失效（如平台侧删除机器人）：清理并回到通道选择窗口
 				_ = qqbot.ClearCreds(a.dir)
 				a.qqState.Store(int32(qqbot.StateInit))
-				a.tray.SetState(ui.StateNeedQR)
+				a.tray.SetState(ui.StateError) // 红：凭据失效
 				a.tray.SetChannelMode(ui.ChannelNone)
 				a.tray.ShowChannelChooser()
 				a.tray.NotifyInfo("AirType", "QQ 凭据已失效；请重新选择通道绑定")
@@ -468,7 +473,7 @@ func (a *app) qrDismissed() {
 	a.logger.Info("用户关闭扫码窗，取消 QQ 绑定流程")
 	a.stopQQ()
 	a.qqState.Store(int32(qqbot.StateInit))
-	a.tray.SetState(ui.StateNeedQR)
+	a.tray.SetState(ui.StateIdle) // 灰：回到未绑定
 	a.tray.ShowChannelChooser()
 }
 
@@ -504,7 +509,7 @@ func (a *app) logout() {
 			a.wxState.Store(int32(ui.StateNeedQR))
 		}
 		a.tray.HideQR()
-		a.tray.SetState(ui.StateNeedQR)
+		a.tray.SetState(ui.StateIdle) // 灰：回到未绑定
 		a.tray.SetChannelMode(ui.ChannelNone)
 		a.tray.NotifyInfo("AirType", "已退出登录；可重新选择绑定通道")
 		a.tray.ShowChannelChooser()
@@ -525,9 +530,11 @@ func (a *app) onText(text string) error {
 		a.logger.Info("已暂停，只记录不注入", "chars", len([]rune(text)))
 		return nil
 	}
-	// 弹窗打开期间注入会打进弹窗自身：只入历史（列表实时刷新），不注入
+	// 弹窗打开期间注入会打进弹窗自身：只入历史（列表实时刷新），不注入；
+	// 头部闪一条"新消息已入历史"，避免用户以为消息丢了
 	if a.tray.PopupVisible() {
 		a.logger.Info("弹窗打开，跳过注入（已入历史，可复制）", "chars", len([]rune(text)))
+		a.tray.PopupFlashNew()
 		return nil
 	}
 	return a.inject(text)

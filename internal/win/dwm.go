@@ -46,6 +46,32 @@ func RoundCorners(hwnd uintptr) {
 		uintptr(unsafe.Pointer(&v)), unsafe.Sizeof(v))
 }
 
+// EnableDarkTitlebar 按系统深浅色染标题栏（DWMWA_USE_IMMERSIVE_DARK_MODE）。
+func EnableDarkTitlebar(hwnd uintptr, dark bool) {
+	const dwmwaUseImmersiveDarkMode = 20
+	v := uint32(0)
+	if dark {
+		v = 1
+	}
+	pDwmSetWindowAttribute.Call(hwnd, dwmwaUseImmersiveDarkMode,
+		uintptr(unsafe.Pointer(&v)), unsafe.Sizeof(v))
+}
+
+// FixWindowSize 禁止拖拽缩放与最大化（流程窗口：选通道/扫码不应被拉成全屏）。
+// walk 判定固定尺寸的依据正是无 WS_THICKFRAME。
+func FixWindowSize(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	const wsThickFrame, wsMaximizeBox = 0x00040000, 0x00010000
+	gwlStyle := ^uintptr(15)
+	style, _, _ := pGetWindowLongW.Call(hwnd, gwlStyle)
+	pSetWindowLongW.Call(hwnd, gwlStyle, style & ^uintptr(wsThickFrame|wsMaximizeBox))
+	const swpNoSize, swpNoMove, swpNoZOrder, swpNoActivate, swpFrameChanged = 0x2, 0x1, 0x4, 0x10, 0x20
+	pSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoZOrder|swpNoActivate|swpFrameChanged)
+}
+
 // ShowContextMenu 在鼠标位置弹出原生上下文菜单，返回选中项索引（0 起），
 // 取消返回 -1。owner 为接收菜单消息的窗口句柄（须为前台窗口）。
 func ShowContextMenu(owner uintptr, items []string) int {

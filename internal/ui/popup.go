@@ -426,6 +426,7 @@ type fluentList struct {
 	w        *walk.CustomWidget
 	p        *historyPopup
 	pal      Palette
+	dwrite   *win.TextRenderer // 彩色 emoji 渲染；不可用时回退 GDI
 	items    []fluentItem
 	hover    int // -1 无
 	sel      int // 键盘选中索引，-1 无
@@ -472,7 +473,31 @@ func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) 
 	w.MouseDown().Attach(fl.onMouseDown)
 	w.MouseWheel().Attach(fl.onMouseWheel)
 	w.KeyDown().Attach(fl.onKeyDown)
+
+	// DirectWrite 渲染器：彩色 emoji + 更细腻的抗锯齿；初始化失败静默回退 GDI
+	if r, err := win.GetTextRenderer(w.DPI()); err == nil {
+		fl.dwrite = r
+	} else {
+		p.tray.cfg.Logger.Warn("DirectWrite 不可用，消息行使用 GDI 渲染（emoji 为黑白轮廓）", "err", err)
+	}
 	return fl, nil
+}
+
+// drawRowText 画一行文本：优先 DirectWrite（彩色 emoji/省略号截断），
+// 失败回退 GDI DrawText。
+func (fl *fluentList) drawRowText(canvas *walk.Canvas, text string, r walk.Rectangle, color walk.Color, big bool) error {
+	if fl.dwrite != nil {
+		if err := fl.dwrite.DrawText(uintptr(canvas.HDC()), text,
+			int32(r.X), int32(r.Y), int32(r.Width), int32(r.Height), uint32(color), big); err == nil {
+			return nil
+		}
+		// DWrite 本次失败：该行回退 GDI
+	}
+	f := fl.fntTime
+	if big {
+		f = fl.fntText
+	}
+	return canvas.DrawTextPixels(text, f, color, r, walk.TextEndEllipsis|walk.TextSingleLine)
 }
 
 // Focus 让列表获得键盘焦点（滚轮/按键事件发给焦点窗口）。
@@ -690,7 +715,7 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 			Width:  bounds.Width - pad - walk.IntFrom96DPI(16, dpi),
 			Height: walk.IntFrom96DPI(20, dpi),
 		}
-		if err := canvas.DrawTextPixels(it.text, fl.fntText, pal.Text, r1, walk.TextEndEllipsis|walk.TextSingleLine); err != nil {
+		if err := fl.drawRowText(canvas, it.text, r1, pal.Text, true); err != nil {
 			return err
 		}
 		// 第二行：相对时间；刚复制的行临时显示"已复制 ✓"
@@ -703,7 +728,7 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 			Width:  bounds.Width - pad - walk.IntFrom96DPI(16, dpi),
 			Height: walk.IntFrom96DPI(16, dpi),
 		}
-		if err := canvas.DrawTextPixels(line2, fl.fntTime, col, r2, walk.TextEndEllipsis|walk.TextSingleLine); err != nil {
+		if err := fl.drawRowText(canvas, line2, r2, col, false); err != nil {
 			return err
 		}
 		y += rowH

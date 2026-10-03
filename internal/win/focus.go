@@ -105,8 +105,8 @@ func ForegroundClassName() string {
 
 const spiGetWorkArea = 0x0030
 
-// WorkArea 返回主显示器工作区（不含任务栏）尺寸，用于历史弹窗锚定。
-func WorkArea() (width, height int32) {
+// workArea 返回主显示器工作区（不含任务栏）尺寸（包内锚定计算用）。
+func workArea() (width, height int32) {
 	var rect struct{ Left, Top, Right, Bottom int32 }
 	pSystemParametersInfo.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&rect)), 0)
 	return rect.Right - rect.Left, rect.Bottom - rect.Top

@@ -33,20 +33,20 @@ const monitorDefaultToNearest = 2
 func WorkAreaAtCursor() Rect {
 	var pt point
 	if ok, _, _ := pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt))); ok == 0 {
-		w, h := WorkArea()
+		w, h := workArea()
 		return Rect{Width: w, Height: h}
 	}
 	// POINT 按值传参：x64 下打包为一个 uintptr
 	ptVal := uintptr(uint64(uint32(pt.X)) | uint64(uint32(pt.Y))<<32)
 	hm, _, _ := pMonitorFromPoint.Call(ptVal, monitorDefaultToNearest)
 	if hm == 0 {
-		w, h := WorkArea()
+		w, h := workArea()
 		return Rect{Width: w, Height: h}
 	}
 	var mi monitorInfo
 	mi.cbSize = uint32(unsafe.Sizeof(mi))
 	if ok, _, _ := pGetMonitorInfoW.Call(hm, uintptr(unsafe.Pointer(&mi))); ok == 0 {
-		w, h := WorkArea()
+		w, h := workArea()
 		return Rect{Width: w, Height: h}
 	}
 	return Rect{

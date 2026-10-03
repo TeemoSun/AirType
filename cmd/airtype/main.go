@@ -23,6 +23,7 @@ import (
 	"github.com/TeemoSun/AirType/internal/bot"
 	"github.com/TeemoSun/AirType/internal/history"
 	"github.com/TeemoSun/AirType/internal/paths"
+	"github.com/TeemoSun/AirType/internal/qqbot"
 	"github.com/TeemoSun/AirType/internal/settings"
 	"github.com/TeemoSun/AirType/internal/typer"
 	"github.com/TeemoSun/AirType/internal/ui"
@@ -106,6 +107,7 @@ func run(dataDir string) int {
 		},
 		ToggleAutoEnter: a.toggleAutoEnter,
 		Rescan:          a.rescan,
+		BindQQ:          a.bindQQ,
 		Logout:          a.logout,
 		OpenLog:         func() { openExplorerSelect(filepath.Join(dir, "airtype.log")) },
 		AutostartSet:    autostart.Set,
@@ -130,11 +132,17 @@ func run(dataDir string) int {
 		tray.NotifyError("AirType", "启动失败："+err.Error())
 	}
 
+	// 已绑定过 QQ 机器人则并行启动 QQ 通道
+	if err := a.startQQ(false); err != nil && !errors.Is(err, qqbot.ErrNotBound) {
+		logger.Error("启动 QQ 机器人失败", "err", err)
+	}
+
 	// 阻塞至托盘退出
 	tray.Run()
 
 	a.appCancel()
 	a.stopBot()
+	a.stopQQ()
 	received, dropped := a.stats()
 	logger.Info("AirType 退出", "received", received, "dropped", dropped)
 	return 0
@@ -151,6 +159,10 @@ type app struct {
 	// autoEnter：消息注入完成后自动补一次回车（发送）。持久化到 settings.json。
 	autoEnter atomic.Bool
 
+	// 双通道状态（int32 存枚举），refreshTrayState 据此合并托盘颜色。
+	wxState atomic.Int32 // ui.TrayState
+	qqState atomic.Int32 // qqbot.State
+
 	appCtx    context.Context
 	appCancel context.CancelFunc
 
@@ -158,6 +170,32 @@ type app struct {
 	b         *bot.Bot
 	runCancel context.CancelFunc
 	runDone   chan struct{}
+
+	qq       *qqbot.Bot
+	qqCancel context.CancelFunc
+	qqDone   chan struct{}
+}
+
+// refreshTrayState 合并微信/QQ 两通道状态决定托盘颜色：
+// 任一通道已连接即绿（至少一个通道可用）；否则任一通道异常/断连即黄；
+// 都未登录则红。微信的看门狗黄/收信恢复绿也走这里。
+func (a *app) refreshTrayState() {
+	wx := ui.TrayState(a.wxState.Load())
+	qq := qqbot.State(a.qqState.Load())
+	switch {
+	case wx == ui.StateConnected || qq == qqbot.StateConnected:
+		a.tray.SetState(ui.StateConnected)
+	case wx == ui.StateWarning || wx == ui.StateDisconnected,
+		qq == qqbot.StateDisconnected || qq == qqbot.StateSessionExpired:
+		a.tray.SetState(ui.StateWarning)
+	default:
+		a.tray.SetState(ui.StateNeedQR)
+	}
+}
+
+func (a *app) setWXState(s ui.TrayState) {
+	a.wxState.Store(int32(s))
+	a.refreshTrayState()
 }
 
 // staleAfter 是"已连接但多久没收到消息算异常"的阈值。
@@ -181,7 +219,7 @@ func healthWatchdog(ctx context.Context, a *app) {
 				continue
 			}
 			if last := b.LastReceivedAt(); !last.IsZero() && time.Since(last) > staleAfter {
-				a.tray.SetState(ui.StateWarning)
+				a.setWXState(ui.StateWarning)
 			}
 		}
 	}
@@ -212,19 +250,19 @@ func (a *app) startBot() error {
 	b, err := bot.New(bot.Options{
 		DataDir: a.dir,
 		Logger:  a.logger,
-		OnText:  a.onText,
+		OnText:  a.onWxText,
 		OnQRCode: func(imageURL string) {
 			a.tray.ShowQR(imageURL)
 		},
 		OnState: func(s bot.State) {
 			switch s {
 			case bot.StateConnected:
-				a.tray.SetState(ui.StateConnected)
+				a.setWXState(ui.StateConnected)
 				a.tray.HideQR()
 			case bot.StateSessionExpired:
-				a.tray.SetState(ui.StateNeedQR) // 红：登录过期，需重新扫码
+				a.setWXState(ui.StateNeedQR) // 红：登录过期，需重新扫码
 			case bot.StateDisconnected:
-				a.tray.SetState(ui.StateWarning) // 黄：连不上服务器（token 仍有效）
+				a.setWXState(ui.StateWarning) // 黄：连不上服务器（token 仍有效）
 			}
 		},
 	})
@@ -241,7 +279,7 @@ func (a *app) startBot() error {
 		defer close(done)
 		if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.logger.Error("bot 运行结束", "err", err)
-			a.tray.SetState(ui.StateDisconnected)
+			a.setWXState(ui.StateDisconnected)
 		}
 	}()
 	return nil
@@ -264,6 +302,88 @@ func (a *app) stopBot() {
 	if a.b != nil {
 		a.b.Close()
 		a.b = nil
+	}
+}
+
+// startQQ 启动 QQ 通道。withBind=true 时先走扫码绑定再连网关；
+// 否则要求已有凭据（未绑定时返回 ErrNotBound）。
+func (a *app) startQQ(withBind bool) error {
+	b, err := qqbot.New(qqbot.Options{
+		DataDir: a.dir,
+		Logger:  a.logger,
+		OnText:  a.onText,
+		OnState: func(s qqbot.State) {
+			a.qqState.Store(int32(s))
+			a.refreshTrayState()
+		},
+		OnQRCode: func(u string) {
+			a.tray.ShowQRWindow("扫码绑定 QQ 机器人",
+				"用手机 QQ 扫描下方二维码，确认后电脑端自动连接", u)
+		},
+		OnBound: func(appID string) {
+			a.tray.HideQR()
+			a.tray.NotifyInfo("AirType", "QQ 机器人绑定成功（AppID "+appID+"），正在连接…")
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if !withBind && !b.Bound() {
+		return qqbot.ErrNotBound
+	}
+	ctx, cancel := context.WithCancel(a.appCtx)
+	done := make(chan struct{})
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.qq, a.qqCancel, a.qqDone = b, cancel, done
+	go func() {
+		defer close(done)
+		if withBind {
+			if _, err := b.Bind(ctx); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					a.logger.Error("QQ 绑定失败", "err", err)
+					a.tray.HideQR()
+					a.tray.NotifyError("AirType", "QQ 绑定失败："+err.Error())
+				}
+				return
+			}
+		}
+		if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			a.logger.Error("QQ 会话结束", "err", err)
+			if b.State() == qqbot.StateSessionExpired {
+				a.tray.NotifyInfo("AirType", "QQ 机器人凭据已失效；请通过\"绑定 QQ 机器人\"重新扫码")
+			}
+		}
+	}()
+	return nil
+}
+
+// stopQQ 停止 QQ 通道（绑定流程与会话一并取消），2 秒兜底超时。
+func (a *app) stopQQ() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.qqCancel != nil {
+		a.qqCancel()
+		select {
+		case <-a.qqDone:
+		case <-time.After(2 * time.Second):
+			a.logger.Warn("QQ 通道未在 2 秒内退出，放弃等待")
+		}
+		a.qqCancel = nil
+		a.qqDone = nil
+	}
+	if a.qq != nil {
+		a.qq = nil
+	}
+}
+
+// bindQQ 托盘"绑定 QQ 机器人"入口：停旧会话，弹二维码走绑定流程。
+func (a *app) bindQQ() {
+	a.logger.Info("开始绑定 QQ 机器人")
+	a.stopQQ()
+	if err := a.startQQ(true); err != nil {
+		a.logger.Error("启动 QQ 绑定流程失败", "err", err)
+		a.tray.NotifyError("AirType", "QQ 绑定启动失败："+err.Error())
 	}
 }
 
@@ -295,13 +415,15 @@ func (a *app) logout() {
 	a.tray.NotifyInfo("AirType", "已退出登录；需要时可通过\"重新扫码\"重新绑定")
 }
 
+// onWxText 微信通道收信：先做通道健康恢复（黄色巡检态→绿），
+// 再走共用处理。QQ 通道直接用 onText（不影响微信侧状态）。
+func (a *app) onWxText(text string) error {
+	a.setWXState(ui.StateConnected)
+	return a.onText(text)
+}
+
 func (a *app) onText(text string) error {
-	received := time.Now()
-	a.tray.SetLastReceived(received)
-	// 收到消息 = 通道健康，从黄色巡检态恢复为绿色
-	if a.tray.State() == ui.StateWarning {
-		a.tray.SetState(ui.StateConnected)
-	}
+	a.tray.SetLastReceived(time.Now())
 	a.hist.Add(text) // 暂停时也记录：消息不丢，事后可从历史弹窗补发
 	if a.paused.Load() {
 		a.logger.Info("已暂停，只记录不注入", "chars", len([]rune(text)))

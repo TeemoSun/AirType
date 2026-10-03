@@ -18,6 +18,7 @@ build/
 *.old.log
 token.json
 default.json
+qqbot.json
 history.json
 
 # Icon render temp files

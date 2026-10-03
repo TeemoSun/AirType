@@ -61,6 +61,8 @@ type Config struct {
 	ToggleAutoEnter  func() bool
 	// Rescan 重新扫码（停 bot、删 token、重启）。
 	Rescan func()
+	// BindQQ 扫码绑定 QQ 机器人（弹出二维码，成功后自动连接）。
+	BindQQ func()
 	// Logout 退出登录（删本地 token，回到未扫码状态，停止 bot）。
 	Logout func()
 	// OpenLog 打开日志文件所在位置。
@@ -85,6 +87,8 @@ type Tray struct {
 	lastReceived time.Time
 	qrWin        *walk.MainWindow
 	qrView       *walk.ImageView
+	qrTitleLbl   *walk.Label
+	qrHintLbl    *walk.Label
 	qrShown      bool
 }
 
@@ -221,6 +225,15 @@ func (t *Tray) buildMenu() {
 		}
 	})
 	menu.Actions().Add(rescan)
+
+	bindQQ := walk.NewAction()
+	bindQQ.SetText("绑定 QQ 机器人")
+	bindQQ.Triggered().Attach(func() {
+		if t.cfg.BindQQ != nil {
+			t.cfg.BindQQ()
+		}
+	})
+	menu.Actions().Add(bindQQ)
 
 	logout := walk.NewAction()
 	logout.SetText("退出登录")
@@ -479,8 +492,14 @@ func (t *Tray) SimulateTaskbarRestartForTest() {
 	})
 }
 
-// ShowQR 显示扫码二维码窗口（线程安全）。imageURL 为二维码内容链接。
+// ShowQR 显示微信扫码二维码窗口（线程安全）。imageURL 为二维码内容链接。
 func (t *Tray) ShowQR(imageURL string) {
+	t.ShowQRWindow("扫码绑定微信", "用手机微信扫描下方二维码，授权后电脑端自动连接", imageURL)
+}
+
+// ShowQRWindow 显示可自定义标题/提示的扫码窗口（QQ 机器人绑定等场景）。
+// 线程安全。
+func (t *Tray) ShowQRWindow(title, hint, imageURL string) {
 	pngBytes, err := qrcode.Encode(imageURL, qrcode.Medium, 420)
 	if err != nil {
 		t.cfg.Logger.Error("生成二维码失败", "err", err)
@@ -491,6 +510,9 @@ func (t *Tray) ShowQR(imageURL string) {
 		if t.qrWin == nil {
 			return
 		}
+		_ = t.qrWin.SetTitle("AirType · " + title)
+		_ = t.qrTitleLbl.SetText(title)
+		_ = t.qrHintLbl.SetText(hint)
 		// 先 Show 让窗口落到具体显示器上，DPI() 才是真实值
 		if !t.qrWin.Visible() {
 			t.qrWin.Show()
@@ -521,6 +543,7 @@ func (t *Tray) HideQR() {
 }
 
 // ensureQRWindow 惰性创建二维码窗口（必须在 UI 线程调用）。
+// 标题与提示文案由 ShowQRWindow 每次刷新（微信/QQ 共用此窗口）。
 // 注意：walk 窗口带子控件必须设 Layout，否则 WM_SIZE 时 startLayout 崩溃。
 func (t *Tray) ensureQRWindow() {
 	if t.qrWin != nil {
@@ -528,19 +551,22 @@ func (t *Tray) ensureQRWindow() {
 	}
 	var w *walk.MainWindow
 	var iv *walk.ImageView
+	var ttl, hnt *walk.Label
 	err := MainWindow{
 		AssignTo:   &w,
-		Title:      "AirType · 微信扫码绑定",
+		Title:      "AirType · 扫码绑定",
 		Size:       Size{Width: 480, Height: 580},
 		Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)},
 		Layout:     VBox{Margins: Margins{Left: 20, Top: 24, Right: 20, Bottom: 20}, Spacing: 14},
 		Children: []Widget{
 			Label{
-				Text: "扫码绑定微信",
-				Font: Font{Family: "Segoe UI", PointSize: 15, Bold: true},
+				AssignTo: &ttl,
+				Text:     "",
+				Font:     Font{Family: "Segoe UI", PointSize: 15, Bold: true},
 			},
 			Label{
-				Text:      "用手机微信扫描下方二维码，授权后电脑端自动连接",
+				AssignTo:  &hnt,
+				Text:      "",
 				TextColor: walk.RGB(138, 143, 150),
 			},
 			ImageView{AssignTo: &iv, MinSize: Size{Width: 420, Height: 420}},
@@ -553,6 +579,8 @@ func (t *Tray) ensureQRWindow() {
 	}
 	t.qrWin = w
 	t.qrView = iv
+	t.qrTitleLbl = ttl
+	t.qrHintLbl = hnt
 	win.RoundCorners(uintptr(w.Handle()))
 }
 

@@ -35,6 +35,7 @@ flowchart LR
 
 - **零配置单文件 EXE**：Go 静态编译，无 DLL 依赖，绿色免安装，双击即用
 - **系统级打字**：Win32 `SendInput` 注入，中文、Emoji 直接上屏，不依赖输入法，任何能接收键盘的窗口都生效
+- **双通道：微信 + QQ**：除微信外，右键菜单"绑定 QQ 机器人"扫码即可接入 QQ 官方机器人（WebSocket 实时推送），手机 QQ 发私聊同样隔空打字
 - **常驻托盘**：三态图标一眼看清状态，无需控制台窗口
 - **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出，单击复制、右键删除、失焦自动关闭
 - **暂停注入**：只记录不注入，消息不丢，随时恢复
@@ -64,7 +65,7 @@ flowchart LR
 
 - **左键托盘**：红色时弹扫码窗；否则弹出历史消息弹窗
 - **历史弹窗**：单击条目复制到剪贴板，右键可复制 / 删除，点窗口外自动关闭
-- **右键菜单**：暂停注入 / 自动回车 / 重新扫码 / 退出登录 / 清空历史 / 打开日志 / 开机自启 / 退出
+- **右键菜单**：暂停注入 / 自动回车 / 重新扫码 / 绑定 QQ 机器人 / 退出登录 / 清空历史 / 打开日志 / 开机自启 / 退出
 
 ## ⚠️ 注意事项
 
@@ -159,6 +160,9 @@ WeChat and your PC has internet, it works from anywhere.
 - **Single-file EXE, zero setup** — statically compiled with Go, no DLL dependencies, portable
 - **System-level typing** — Win32 `SendInput` injection: CJK and emoji typed directly,
   independent of any IME; works in any window that accepts keyboard input
+- **Dual channel: WeChat + QQ** — besides WeChat, scan a QR from the tray menu
+  ("绑定 QQ 机器人") to connect an official QQ bot (WebSocket push); messages
+  sent to the bot on mobile QQ get typed the same way
 - **Tray-resident** — three-state icon tells you everything at a glance, no console window
 - **History popup** — Fluent-style rounded popup from a tray click: copy on click,
   delete via right-click, auto-close on focus loss
@@ -193,7 +197,7 @@ Data (token, history, logs) lives in `%LOCALAPPDATA%\AirType\`; override with `-
 
 - **Left-click the tray**: shows the QR window when red; otherwise toggles the history popup
 - **History popup**: click an entry to copy it, right-click for copy / delete, closes on focus loss
-- **Right-click menu**: pause / auto-enter / rescan QR / log out / clear history / open log / autostart / exit
+- **Right-click menu**: pause / auto-enter / rescan QR / bind QQ bot / log out / clear history / open log / autostart / exit
 
 ## ⚠️ Notes
 

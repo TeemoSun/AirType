@@ -388,7 +388,7 @@ func (t *Tray) applyIcon() error {
 	case t.state == StateNeedQR, t.state == StateWarning, t.state == StateDisconnected:
 		name = "yellow"
 	}
-	icon, err := stateIcon(name)
+	icon, err := stateIcon(name, t.ni.DPI())
 	if err != nil {
 		return fmt.Errorf("ui: 加载图标 %s 失败: %w", name, err)
 	}

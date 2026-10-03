@@ -22,7 +22,7 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}" -replace '^v',''
-          go run github.com/tc-hib/go-winres@v0.1.1 make --in winres/winres.json --out cmd/airtype/rsrc --file-version $v --product-version $v
+          go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64 --in winres/winres.json --out cmd/airtype/rsrc --file-version $v --product-version $v
       - name: Build AirType.exe
         env:
           CGO_ENABLED: '0'

@@ -39,7 +39,7 @@ flowchart LR
 - **常驻托盘**：四态图标一眼看清状态（绿=正常 / 灰=未绑定 / 黄=待扫码或异常 / 红=凭据失效），无需控制台窗口
 - **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出；单击复制（行内"已复制"反馈）、右键复制 / 删除 / 重新打字、悬停看全文、键盘 ↑↓/Enter/Delete、迷你滚动条、失焦或 Esc 关闭
 - **彩色 emoji**：消息行 DirectWrite 渲染，😀🚀 与手机端同观感
-- **深色模式**：自动跟随系统深浅色（含弹窗、窗口标题栏）
+- **深色模式**：自动跟随系统深浅色（弹窗、窗口标题栏、托盘/右键菜单），点缀系统强调色
 - **暂停打字 / 自动回车**：只记录不注入、打完自动补回车发送；都是托盘菜单开关，重启后记住状态
 - **凭据加密存储**：微信 token 与 QQ 凭据经 Windows DPAPI 加密落盘（绑定到当前用户），明文文件自动迁移
 - **免扫码重连**：token 本地持久化，重启电脑后自动恢复登录
@@ -68,7 +68,7 @@ flowchart LR
 
 - **左键托盘**：未绑定时弹通道选择窗口；待扫码时弹二维码；已绑定时弹出历史消息弹窗（再点一次收起）
 - **历史弹窗**：单击条目复制（行内反馈），右键可复制 / 删除 / 重新打字，点窗口外或 Esc 关闭，键盘 ↑↓ 导航
-- **右键菜单**：查看历史 / 暂停打字 / 自动回车 ‖ 切换通道… ‖ 打开日志 / 清空历史 ‖ 开关机自启 ‖ 退出（绑定/换绑统一走通道选择窗口，菜单不含绑定项）
+- **右键菜单**：查看历史 / 暂停打字 / 自动回车 ‖ 切换通道… ‖ 打开日志 / 清空历史 ‖ 开机自启 ‖ 退出（绑定/换绑统一走通道选择窗口，菜单不含绑定项）
 
 ## ⚠️ 注意事项
 
@@ -84,7 +84,7 @@ flowchart LR
 统一入口 `scripts/build.sh`（Git Bash）：
 
 ```bash
-scripts/build.sh all      # tidy + vet + test + 全部二进制 → build/
+scripts/build.sh all      # vet + test + 全部二进制 → build/
 scripts/build.sh icons    # 重新生成图标资源（cmd/icongen）
 scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检）
 ```
@@ -101,7 +101,7 @@ scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检�
 | :--- | :--- |
 | 消息通道 | 微信：iLink 协议（`ilinkai.weixin.qq.com`）长轮询，端到端约 0.5~2 秒；QQ：官方机器人平台 WebSocket 推送（实测体感更快），空闲超时续期 + RESUME 会话恢复 + 退避复位，断线窗口消息不丢 |
 | 键盘注入 | `SendInput` + `KEYEVENTF_UNICODE`，UTF-16 代理对完整支持 Emoji，换行折叠为回车 |
-| 界面 | `lxn/walk` 原生 Win32 控件 + 自绘列表，Win11 DWM 圆角无边框弹窗；消息行 DirectWrite 渲染（彩色 emoji）；深浅色主题自动跟随 |
+| 界面 | Win11 Fluent 实色风格（系统强调色、抗锯齿圆角、卡片化控件），`lxn/walk` 原生控件 + 自绘列表，DWM 圆角无边框弹窗与标题栏融合；消息行 DirectWrite 渲染（彩色 emoji）；深浅色含原生菜单自动跟随；绘制能力不可用时自动回退经典形态 |
 | 稳定性 | 单实例互斥锁、注入分批提交、看门狗健康检测、退出 2 秒兜底超时、托盘图标守护（任务栏重建/二次启动自动重挂）、微信/QQ 断线自动重连 |
 | 安全 | 凭据 DPAPI 加密落盘、QQ 消息按绑定者 openid 过滤、错误气泡不泄漏内部信息 |
 | 构建 | `CGO_ENABLED=0` 静态编译单文件，`.syso` 资源直接进 Git，CI 自动校验（vet/test/gofmt/tidy） |
@@ -111,10 +111,10 @@ scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检�
 ## 🗺️ 里程碑
 
 - [x] **v1.0** 控制台 MVP：扫码绑定、实时注入、token 持久化
-- [x] **v1.1** 托盘常驻：多态图标、扫码 GUI 化、暂停打字、自动回车、开机自启、QQ 通道
+- [x] **v1.1** 托盘常驻：多态图标、扫码 GUI 化、暂停打字、开机自启、QQ 通道（扫码绑定 + WebSocket 推送、通道选择窗口）、托盘图标守护
 - [x] **历史弹窗**：Fluent 圆角弹窗、复制 / 删除 / 重新打字、键盘导航、深色模式、彩色 emoji
-- [x] **v1.2** 质量与体验大版本：QQ 网关断线治理（空闲超时 + RESUME）、DPAPI 凭据加密、UI 全面重构、CI/版本工程化
-- [x] **v1.2** QQ 通道：微信/QQ 完全对等二选一、通道选择窗口、扫码绑定 QQ 官方机器人（WebSocket）；自动回车、托盘图标守护、网络抖动优化
+- [x] **v1.2** 质量与体验大版本：QQ 网关断线治理（空闲超时 + RESUME）、DPAPI 凭据加密、自动回车、UI 全面重构、CI/版本工程化
+- [x] **v1.3** 界面现代化：Win11 实色 Fluent 重设计——系统强调色、抗锯齿圆角、卡片化通道选择、二维码圆角卡片、原生菜单深浅色跟随（无材质依赖，旧系统自动回退经典形态）
 
 ## ⚠️ 免责声明
 
@@ -179,7 +179,8 @@ WeChat and your PC has internet, it works from anywhere.
   (inline "copied" feedback), right-click for copy / delete / retype, full text
   on hover, keyboard navigation, mini scrollbar, closes on focus loss or Esc
 - **Color emoji** — message rows rendered with DirectWrite, 😀🚀 look like they do on your phone
-- **Dark mode** — follows the system light/dark theme automatically
+- **Dark mode** — follows the system light/dark theme automatically (popup, title
+  bars, tray & context menus), accented with your system accent color
 - **Pause typing / Auto-Enter** — record-only mode and send-after-typing; both are
   tray-menu toggles remembered across restarts
 - **Encrypted credentials** — WeChat token and QQ secrets are sealed with Windows
@@ -237,7 +238,7 @@ Data (token, history, logs) lives in `%LOCALAPPDATA%\AirType\`; override with `-
 One entrypoint, `scripts/build.sh` (Git Bash):
 
 ```bash
-scripts/build.sh all      # tidy + vet + test + all binaries → build/
+scripts/build.sh all      # vet + test + all binaries → build/
 scripts/build.sh icons    # regenerate icon assets (cmd/icongen)
 scripts/build.sh uishot   # screenshot the real UI to %TEMP% for visual checks
 ```
@@ -257,7 +258,7 @@ scripts/build.sh uishot   # screenshot the real UI to %TEMP% for visual checks
 | :--- | :--- |
 | Message channel | WeChat: iLink protocol (`ilinkai.weixin.qq.com`) long polling, ~0.5–2s end-to-end; QQ: official bot platform WebSocket push (noticeably faster in practice) with idle-timeout keepalive, session RESUME and backoff reset — no messages lost across reconnects |
 | Keyboard injection | `SendInput` + `KEYEVENTF_UNICODE` with full UTF-16 surrogate-pair emoji support, newline→Enter folding |
-| UI | `lxn/walk` native Win32 controls + custom-drawn list, Win11 DWM rounded borderless popup; DirectWrite text rows (color emoji); automatic light/dark theming |
+| UI | Win11 Fluent solid-color style (system accent color, anti-aliased rounded corners, card widgets); `lxn/walk` native controls + custom-drawn list; DWM rounded borderless popups with blended title bars; DirectWrite text rows (color emoji); light/dark theming incl. native menus, graceful fallback when drawing support is missing |
 | Robustness | single-instance mutex, batched input submission, health watchdog, 2s shutdown timeout, tray-icon guard (auto re-add on taskbar restart / second launch), auto-reconnect for both channels |
 | Security | DPAPI-sealed credentials on disk, QQ messages filtered by the binding user's openid, error balloons never leak internals |
 | Build | `CGO_ENABLED=0` static single binary, `.syso` resources committed, CI on every push (vet/test/gofmt/tidy), PE version injected from the release tag |
@@ -267,13 +268,17 @@ Full design docs (in Chinese): [docs/开发方案.md](docs/开发方案.md).
 ## 🗺️ Milestones
 
 - [x] **v1.0** console MVP — QR pairing, live injection, persistent token
-- [x] **v1.1** tray-resident — multi-state icon, GUI QR scan, pause, auto-enter,
-  autostart, QQ channel with channel chooser
+- [x] **v1.1** tray-resident — multi-state icon, GUI QR scan, pause, autostart,
+  QQ channel (QR binding + WebSocket push, channel chooser), tray-icon guard
 - [x] **history popup** — Fluent rounded popup, copy/delete/retype, keyboard
   navigation, dark mode, color emoji
 - [x] **v1.2** quality & experience release — QQ gateway disconnect hardening
-  (idle timeout + RESUME), DPAPI credential sealing, full UI overhaul,
-  CI/versioning engineering
+  (idle timeout + RESUME), DPAPI credential sealing, auto-enter, full UI
+  overhaul, CI/versioning engineering
+- [x] **v1.3** UI modernization — Win11 solid-color Fluent redesign: system
+  accent color, anti-aliased rounded corners, card-style channel chooser,
+  rounded QR card, native menus follow light/dark (no material dependencies;
+  older systems fall back gracefully)
 
 ## ⚠️ Disclaimer
 

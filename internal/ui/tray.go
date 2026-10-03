@@ -49,10 +49,25 @@ func (s TrayState) String() string {
 type ChannelMode int
 
 const (
-	ChannelNone   ChannelMode = iota // 未绑定（可任选微信或 QQ）
+	ChannelNone   ChannelMode = iota // 未绑定（弹选择窗口任选微信或 QQ）
 	ChannelWeChat                    // 微信通道
 	ChannelQQ                        // QQ 通道
 )
+
+// ChannelChoice 是通道选择窗口的点击结果。
+type ChannelChoice int
+
+const (
+	ChoiceWeChat ChannelChoice = iota
+	ChoiceQQ
+)
+
+func (c ChannelChoice) String() string {
+	if c == ChoiceQQ {
+		return "QQ"
+	}
+	return "WeChat"
+}
 
 // Config 是 Tray 依赖的业务回调。
 type Config struct {
@@ -68,11 +83,9 @@ type Config struct {
 	// AutoEnterEnabled 查询"自动回车"初始状态；ToggleAutoEnter 切换并返回切换后的状态。
 	AutoEnterEnabled func() bool
 	ToggleAutoEnter  func() bool
-	// Rescan 重新扫码（停 bot、删 token、重启）。
-	Rescan func()
-	// BindQQ 扫码绑定 QQ 机器人（弹出二维码，成功后自动连接）。
-	BindQQ func()
-	// Logout 退出登录（删本地 token，回到未扫码状态，停止 bot）。
+	// ChooseChannel 通道选择窗口点击"微信"或"QQ"时回调（启动对应绑定流程）。
+	ChooseChannel func(choice ChannelChoice)
+	// Logout 退出登录（清理当前通道凭据，回到未绑定状态，重新弹选择窗口）。
 	Logout func()
 	// OpenLog 打开日志文件所在位置。
 	OpenLog func()
@@ -91,13 +104,12 @@ type Tray struct {
 
 	pauseAction  *walk.Action
 	autoEnter    *walk.Action
-	rescanAction *walk.Action
-	bindQQAction *walk.Action
 	logoutAction *walk.Action
 	mode         ChannelMode
 	state        TrayState
 	paused       bool
 	lastReceived time.Time
+	chooserWin   *walk.MainWindow
 	qrWin        *walk.MainWindow
 	qrView       *walk.ImageView
 	qrTitleLbl   *walk.Label
@@ -144,9 +156,14 @@ func NewTray(cfg Config) (*Tray, error) {
 
 // attachTrayClick 挂接托盘左键单击行为（图标重建后需对新图标重挂）。
 func (t *Tray) attachTrayClick() {
-	// 左键单击：待扫码时弹出二维码窗口；有历史时弹窗做开关切换；否则气泡摘要
+	// 左键单击：未绑定时弹通道选择窗口；待扫码时弹二维码窗口；
+	// 有历史时弹窗做开关切换；否则气泡摘要
 	t.ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if button != walk.LeftButton {
+			return
+		}
+		if t.mode == ChannelNone {
+			t.ShowChannelChooser()
 			return
 		}
 		if t.state == StateNeedQR {
@@ -230,26 +247,6 @@ func (t *Tray) buildMenu() {
 	menu.Actions().Add(autoEnter)
 	t.autoEnter = autoEnter
 
-	rescan := walk.NewAction()
-	rescan.SetText("重新扫码")
-	rescan.Triggered().Attach(func() {
-		if t.cfg.Rescan != nil {
-			t.cfg.Rescan()
-		}
-	})
-	menu.Actions().Add(rescan)
-	t.rescanAction = rescan
-
-	bindQQ := walk.NewAction()
-	bindQQ.SetText("绑定 QQ 机器人")
-	bindQQ.Triggered().Attach(func() {
-		if t.cfg.BindQQ != nil {
-			t.cfg.BindQQ()
-		}
-	})
-	menu.Actions().Add(bindQQ)
-	t.bindQQAction = bindQQ
-
 	logout := walk.NewAction()
 	logout.SetText("退出登录")
 	logout.Triggered().Attach(func() {
@@ -313,11 +310,8 @@ func (t *Tray) buildMenu() {
 	menu.Actions().Add(quit)
 }
 
-// SetChannelMode 切换通道模式并按模式显隐菜单项（线程安全）：
-//
-//	未绑定：显示"扫码绑定微信"与"绑定 QQ"，隐藏"退出登录"
-//	微信：  "重新扫码"可见，QQ 绑定隐藏（换绑需先退出登录）
-//	QQ：    "绑定 QQ"可见（重绑本通道），微信扫码隐藏
+// SetChannelMode 切换通道模式（线程安全）。菜单不含任何绑定项：
+// 未绑定时通过左键托盘或退出登录回到通道选择窗口。
 func (t *Tray) SetChannelMode(m ChannelMode) {
 	t.mw.Synchronize(func() {
 		t.mode = m
@@ -325,27 +319,13 @@ func (t *Tray) SetChannelMode(m ChannelMode) {
 	})
 }
 
-// applyChannelMode 按当前模式刷新菜单项文字与可见性（须在 UI 线程调用）。
+// applyChannelMode 按当前模式刷新菜单项可见性（须在 UI 线程调用）。
+// 未绑定态隐藏"退出登录"（无会话可退），其余模式均可见。
 func (t *Tray) applyChannelMode() {
-	if t.rescanAction == nil {
+	if t.logoutAction == nil {
 		return
 	}
-	switch t.mode {
-	case ChannelNone:
-		_ = t.rescanAction.SetText("扫码绑定微信")
-		_ = t.rescanAction.SetVisible(true)
-		_ = t.bindQQAction.SetVisible(true)
-		_ = t.logoutAction.SetVisible(false)
-	case ChannelWeChat:
-		_ = t.rescanAction.SetText("重新扫码")
-		_ = t.rescanAction.SetVisible(true)
-		_ = t.bindQQAction.SetVisible(false)
-		_ = t.logoutAction.SetVisible(true)
-	case ChannelQQ:
-		_ = t.rescanAction.SetVisible(false)
-		_ = t.bindQQAction.SetVisible(true)
-		_ = t.logoutAction.SetVisible(true)
-	}
+	_ = t.logoutAction.SetVisible(t.mode != ChannelNone)
 }
 
 // toggleAutoEnterMenu 处理"自动回车"菜单点击：回调业务层切换，
@@ -542,6 +522,79 @@ func (t *Tray) SimulateTaskbarRestartForTest() {
 	t.mw.Synchronize(func() {
 		win.PostTaskbarCreatedForTest(uintptr(t.mw.Handle()))
 	})
+}
+
+// ShowChannelChooser 弹出通道选择窗口（未绑定态，微信/QQ 对等）。
+// 线程安全。
+func (t *Tray) ShowChannelChooser() {
+	t.mw.Synchronize(func() {
+		t.ensureChooserWindow()
+		if t.chooserWin != nil {
+			t.chooserWin.Show()
+			_ = win.Activate(win.Hwnd(t.chooserWin.Handle()), 2*time.Second)
+		}
+	})
+}
+
+// ensureChooserWindow 惰性创建通道选择窗口（须在 UI 线程调用）。
+func (t *Tray) ensureChooserWindow() {
+	if t.chooserWin != nil {
+		return
+	}
+	var w *walk.MainWindow
+	err := MainWindow{
+		AssignTo:   &w,
+		Title:      "AirType · 选择绑定通道",
+		Size:       Size{Width: 400, Height: 300},
+		Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)},
+		Layout:     VBox{Margins: Margins{Left: 28, Top: 28, Right: 28, Bottom: 24}, Spacing: 14},
+		Children: []Widget{
+			Label{
+				Text: "选择消息通道",
+				Font: Font{Family: "Segoe UI", PointSize: 16, Bold: true},
+			},
+			Label{
+				Text:      "扫码绑定后，手机上发消息即可在电脑隔空打字；换绑需先在托盘菜单退出登录",
+				TextColor: walk.RGB(138, 143, 150),
+			},
+			Composite{
+				Layout: HBox{Margins: Margins{Left: 0, Top: 8, Right: 0, Bottom: 0}, Spacing: 16},
+				Children: []Widget{
+					PushButton{
+						AssignTo: nil,
+						Text:     "💬 微信",
+						MinSize:  Size{Width: 150, Height: 52},
+						Font:     Font{Family: "Segoe UI", PointSize: 12},
+						OnClicked: func() {
+							w.Hide()
+							if t.cfg.ChooseChannel != nil {
+								t.cfg.ChooseChannel(ChoiceWeChat)
+							}
+						},
+					},
+					PushButton{
+						Text:    "🐧 QQ 机器人",
+						MinSize: Size{Width: 150, Height: 52},
+						Font:    Font{Family: "Segoe UI", PointSize: 12},
+						OnClicked: func() {
+							w.Hide()
+							if t.cfg.ChooseChannel != nil {
+								t.cfg.ChooseChannel(ChoiceQQ)
+							}
+						},
+					},
+					HSpacer{},
+				},
+			},
+			VSpacer{},
+		},
+	}.Create()
+	if err != nil {
+		t.cfg.Logger.Error("创建通道选择窗口失败", "err", err)
+		return
+	}
+	t.chooserWin = w
+	win.RoundCorners(uintptr(w.Handle()))
 }
 
 // ShowQR 显示微信扫码二维码窗口（线程安全）。imageURL 为二维码内容链接。

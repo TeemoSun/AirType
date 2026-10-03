@@ -92,6 +92,11 @@ func New(opts Options) (*Bot, error) {
 	c, err := ilinksdk.NewClient(
 		ilinksdk.WithTokenStore(store),
 		ilinksdk.WithLogger(opts.Logger),
+		// 会话过期时不走 SDK 默认的自动重登（会直接弹微信二维码）：
+		// 返回 nil 结果让轮询循环停止，由应用层回到通道选择窗口。
+		ilinksdk.WithOnSessionExpired(func(ctx context.Context) (*ilink.LoginResult, error) {
+			return nil, nil
+		}),
 		// 网络抖动下的取信延迟优化：
 		// 1) 轮询失败退避封顶 30s→8s：坏网络时消息取回空窗显著收窄，
 		//    单客户端对腾讯服务器的高频重试完全可接受

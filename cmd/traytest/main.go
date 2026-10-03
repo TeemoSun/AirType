@@ -53,7 +53,9 @@ func main() {
 			logger.Info("ToggleAutoEnter 被调用", "enabled", autoEnterEnabled)
 			return autoEnterEnabled
 		},
-		Rescan:           func() { logger.Info("Rescan 被调用") },
+		ChooseChannel: func(c ui.ChannelChoice) {
+			logger.Info("ChooseChannel 被调用", "channel", c.String())
+		},
 		Logout:           func() { logger.Info("Logout 被调用") },
 		OpenLog:          func() { logger.Info("OpenLog 被调用") },
 		AutostartEnabled: func() bool { return false },
@@ -163,6 +165,11 @@ func scenario(logger *slog.Logger, tray *ui.Tray, hist *history.Store) {
 	} else {
 		logger.Info("二次实例唤醒→图标重建+气泡提示 ✓")
 	}
+
+	// 阶段 8：通道选择窗口（未绑定态的登录入口）
+	callWithWatchdog(logger, tray.ShowChannelChooser, "打开通道选择窗口")
+	time.Sleep(1 * time.Second)
+	logger.Info("通道选择窗口冒烟 ✓（关闭请手动）")
 
 	logger.Info("全部测试序列执行完毕")
 }

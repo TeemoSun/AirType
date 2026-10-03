@@ -33,18 +33,23 @@ flowchart LR
 
 ## ✨ 功能特性
 
-- **零配置单文件 EXE**：Go 静态编译，无 DLL 依赖，绿色免安装，双击即用（无需管理员权限）
-- **系统级打字**：Win32 `SendInput` 注入，中文、Emoji 直接上屏，不依赖输入法，任何能接收键盘的窗口都生效
-- **微信 / QQ 双通道可选**：微信或 QQ 二选一（互斥、完全对等）。未绑定时弹出通道选择窗口，扫码即绑定；QQ 走官方机器人（WebSocket 实时推送 + 断线自动恢复会话），手机 QQ 发私聊同样隔空打字。换绑：托盘菜单"切换通道…"→ 回到选择窗口
-- **常驻托盘**：四态图标一眼看清状态（绿=正常 / 灰=未绑定 / 黄=待扫码或异常 / 红=凭据失效），无需控制台窗口
-- **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出；单击复制（行内"已复制"反馈）、右键复制 / 删除 / 重新打字、悬停看全文、键盘 ↑↓/Enter/Delete、迷你滚动条、失焦或 Esc 关闭
-- **彩色 emoji**：消息行 DirectWrite 渲染，😀🚀 与手机端同观感
-- **深色模式**：自动跟随系统深浅色（弹窗、窗口标题栏、托盘/右键菜单），点缀系统强调色
-- **暂停打字 / 自动回车**：只记录不注入、打完自动补回车发送；都是托盘菜单开关，重启后记住状态
-- **凭据加密存储**：微信 token 与 QQ 凭据经 Windows DPAPI 加密落盘（绑定到当前用户），明文文件自动迁移
-- **免扫码重连**：token 本地持久化，重启电脑后自动恢复登录
-- **开机自启**：托盘菜单一键注册计划任务
-- **健康看门狗**：连接异常或长时间收不到消息自动转黄提醒
+- **单文件免安装**：Go 静态编译单 EXE，无 DLL 依赖，双击即用（无需管理员权限）
+- **微信 / QQ 双通道**：手机扫码即绑定，二选一（对比见下表）
+- **系统级打字**：Win32 `SendInput` 注入，中文、emoji 直接上屏，不依赖输入法，任何能接收键盘的窗口都生效
+- **历史弹窗**：托盘左键弹出最近消息，单击复制、右键复制 / 删除 / 重新打字
+- **现代化界面**：Win11 风格圆角卡片、系统强调色，深浅色跟随系统，托盘四态图标一眼看清连接状态
+
+## 📡 微信 / QQ 通道对比
+
+| | 微信 | QQ |
+| :--- | :--- | :--- |
+| 绑定方式 | 手机微信扫码 | 手机 QQ 扫码 |
+| 消息通道 | iLink 长轮询 | 官方机器人 WebSocket 推送 |
+| 端到端延迟 | 约 0.5~2 秒 | **推送直达，体感更快** |
+| 断线可靠性 | 无心跳，异常靠最后收信时间推断 | 断线自动重连 + 会话恢复，断线窗口消息不丢 |
+| 限制 | — | 仅处理绑定者本人发来的私聊 |
+
+> 两者互斥二选一，换绑零成本（托盘右键"切换通道…"）。推荐 **QQ**：延迟更低、断线更稳；若主力用微信、想配合微信输入法的语音转文字做语音输入，选微信也很顺手。
 
 ## 🚀 快速开始
 
@@ -106,16 +111,6 @@ scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检�
 | 安全 | 凭据 DPAPI 加密落盘、QQ 消息按绑定者 openid 过滤、错误气泡不泄漏内部信息 |
 | 构建 | `CGO_ENABLED=0` 静态编译单文件，`.syso` 资源直接进 Git，CI 自动校验（vet/test/gofmt/tidy） |
 
-完整设计文档见 [docs/开发方案.md](docs/开发方案.md)。
-
-## 🗺️ 里程碑
-
-- [x] **v1.0** 控制台 MVP：扫码绑定、实时注入、token 持久化
-- [x] **v1.1** 托盘常驻：多态图标、扫码 GUI 化、暂停打字、开机自启、QQ 通道（扫码绑定 + WebSocket 推送、通道选择窗口）、托盘图标守护
-- [x] **历史弹窗**：Fluent 圆角弹窗、复制 / 删除 / 重新打字、键盘导航、深色模式、彩色 emoji
-- [x] **v1.2** 质量与体验大版本：QQ 网关断线治理（空闲超时 + RESUME）、DPAPI 凭据加密、自动回车、UI 全面重构、CI/版本工程化
-- [x] **v1.3** 界面现代化：Win11 实色 Fluent 重设计——系统强调色、抗锯齿圆角、卡片化通道选择、二维码圆角卡片、原生菜单深浅色跟随（无材质依赖，旧系统自动回退经典形态）
-
 ## ⚠️ 免责声明
 
 本项目是微信 iLink 协议与 QQ 扫码绑定协议的**独立逆向实现**，非微信/QQ 官方工具，与腾讯无关联。仅供个人学习与效率工具用途；属于未授权客户端形态，使用产生的账号风险自负，请遵守《微信软件许可及服务协议》与 QQ 相关服务协议。下载的 EXE 首次运行可能被 Windows SmartScreen 拦截（无代码签名证书），点"仍要运行"即可；校验和见 Release 附件。
@@ -165,29 +160,29 @@ WeChat and your PC has internet, it works from anywhere.
 
 ## ✨ Features
 
-- **Single-file EXE, zero setup** — statically compiled with Go, no DLL dependencies, portable, no admin rights needed
-- **System-level typing** — Win32 `SendInput` injection: CJK and emoji typed directly,
-  independent of any IME; works in any window that accepts keyboard input
-- **Dual channel: WeChat or QQ** — one at a time, fully equal. A channel
-  chooser appears when nothing is bound; scan the QR to bind. QQ goes through
-  the official bot platform (WebSocket push with idle-timeout keepalive and
-  session RESUME); messages sent to the bot on mobile QQ get typed the same
-  way. To switch: "切换通道…" from the tray menu returns you to the chooser
-- **Tray-resident** — four-state icon at a glance (green = OK, gray = unbound,
-  yellow = needs attention, red = credentials expired), no console window
-- **History popup** — Fluent-style rounded popup from a tray click: copy on click
-  (inline "copied" feedback), right-click for copy / delete / retype, full text
-  on hover, keyboard navigation, mini scrollbar, closes on focus loss or Esc
-- **Color emoji** — message rows rendered with DirectWrite, 😀🚀 look like they do on your phone
-- **Dark mode** — follows the system light/dark theme automatically (popup, title
-  bars, tray & context menus), accented with your system accent color
-- **Pause typing / Auto-Enter** — record-only mode and send-after-typing; both are
-  tray-menu toggles remembered across restarts
-- **Encrypted credentials** — WeChat token and QQ secrets are sealed with Windows
-  DPAPI (bound to your user account); legacy plaintext files migrate automatically
-- **Persistent login** — token is stored locally; reconnects automatically after reboot
-- **Autostart** — register a scheduled task from the tray menu
-- **Health watchdog** — turns yellow on connection issues or long message silence
+- **Single-file, zero setup** — one statically compiled EXE, no DLL dependencies, no installer, no admin rights
+- **WeChat / QQ dual channel** — bind by scanning a QR with your phone; pick one (comparison below)
+- **System-level typing** — Win32 `SendInput` injection: Chinese and emoji typed
+  directly into any window that accepts keyboard input, no IME involved
+- **History popup** — click the tray icon for recent messages: click to copy,
+  right-click for copy / delete / retype
+- **Modern UI** — Win11-style rounded cards with the system accent color,
+  light/dark themes, and a four-state tray icon for connection status at a glance
+
+## 📡 WeChat vs QQ Channel
+
+| | WeChat | QQ |
+| :--- | :--- | :--- |
+| Binding | scan with WeChat on your phone | scan with QQ on your phone |
+| Transport | iLink long polling | official bot platform WebSocket push |
+| Latency | ~0.5–2s end-to-end | **push delivery — noticeably faster** |
+| Reliability | no heartbeat; issues inferred from last-message time | auto-reconnect + session RESUME; no messages lost across disconnects |
+| Limitation | — | only direct messages from the binding account are processed |
+
+> The two are mutually exclusive and switching is free (tray menu → "切换通道…").
+> **QQ is recommended**: lower latency and more robust across disconnects. WeChat
+> is handy if it's your main IM, especially for voice-to-text dictation via the
+> WeChat input method.
 
 ## 🚀 Quick Start
 
@@ -262,23 +257,6 @@ scripts/build.sh uishot   # screenshot the real UI to %TEMP% for visual checks
 | Robustness | single-instance mutex, batched input submission, health watchdog, 2s shutdown timeout, tray-icon guard (auto re-add on taskbar restart / second launch), auto-reconnect for both channels |
 | Security | DPAPI-sealed credentials on disk, QQ messages filtered by the binding user's openid, error balloons never leak internals |
 | Build | `CGO_ENABLED=0` static single binary, `.syso` resources committed, CI on every push (vet/test/gofmt/tidy), PE version injected from the release tag |
-
-Full design docs (in Chinese): [docs/开发方案.md](docs/开发方案.md).
-
-## 🗺️ Milestones
-
-- [x] **v1.0** console MVP — QR pairing, live injection, persistent token
-- [x] **v1.1** tray-resident — multi-state icon, GUI QR scan, pause, autostart,
-  QQ channel (QR binding + WebSocket push, channel chooser), tray-icon guard
-- [x] **history popup** — Fluent rounded popup, copy/delete/retype, keyboard
-  navigation, dark mode, color emoji
-- [x] **v1.2** quality & experience release — QQ gateway disconnect hardening
-  (idle timeout + RESUME), DPAPI credential sealing, auto-enter, full UI
-  overhaul, CI/versioning engineering
-- [x] **v1.3** UI modernization — Win11 solid-color Fluent redesign: system
-  accent color, anti-aliased rounded corners, card-style channel chooser,
-  rounded QR card, native menus follow light/dark (no material dependencies;
-  older systems fall back gracefully)
 
 ## ⚠️ Disclaimer
 

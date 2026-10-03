@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -90,6 +92,14 @@ func New(opts Options) (*Bot, error) {
 	c, err := ilinksdk.NewClient(
 		ilinksdk.WithTokenStore(store),
 		ilinksdk.WithLogger(opts.Logger),
+		// 网络抖动下的取信延迟优化：
+		// 1) 轮询失败退避封顶 30s→8s：坏网络时消息取回空窗显著收窄，
+		//    单客户端对腾讯服务器的高频重试完全可接受
+		ilinksdk.WithPollErrorBackoff(time.Second, 8*time.Second),
+		// 2) 长轮询连接换用带 TCP keepalive 的客户端（SDK 默认 Transport
+		//    未配 Dialer，keepalive 关闭）：5s 探测包既让 NAT/防火墙映射
+		//    不被回收（家用 Wi-Fi 静默掐线的主因），也能尽早发现死连接
+		ilinksdk.WithLongPollHTTPClient(longPollClient()),
 		ilinksdk.WithOnLogin(func(ctx context.Context, qr *login.QRCode) error {
 			if opts.OnQRCode != nil {
 				opts.OnQRCode(qr.ImageURL)
@@ -134,6 +144,25 @@ func New(opts Options) (*Bot, error) {
 	c.Events().Subscribe(event.EventTypeLogin, b.onEvent)
 
 	return b, nil
+}
+
+// longPollClient 构造 getupdates 长轮询专用 HTTP 客户端。
+// 40s 总超时略高于服务端 35s 挂起时长（longpolling_timeout_ms），避免
+// 客户端抢先中止把"正常空返回"变成失败（openclaw-weixin#75 的同类坑）；
+// 5s TCP keepalive 见 New 里的注释。不设 ResponseHeaderTimeout——
+// 长轮询在挂起期间连响应头都不发，只能靠总超时兜底。
+func longPollClient() *http.Client {
+	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 5 * time.Second}
+	return &http.Client{
+		Timeout: 40 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         d.DialContext,
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
 }
 
 func (b *Bot) onEvent(_ context.Context, ev *event.Event) error {

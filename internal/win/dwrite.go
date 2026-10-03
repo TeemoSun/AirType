@@ -168,7 +168,7 @@ func newTextRenderer(dpi int) (*TextRenderer, error) {
 		return f, nil
 	}
 	var err error
-	if r.fmtBig, err = mk(9); err != nil {
+	if r.fmtBig, err = mk(10); err != nil {
 		return nil, err
 	}
 	if r.fmtSmall, err = mk(8); err != nil {

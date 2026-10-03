@@ -25,6 +25,8 @@ func (t *Tray) ShowChannelChooser() {
 
 // ensureChooserWindow 惰性创建通道选择窗口（须在 UI 线程调用）。
 // 系统深浅色切换后销毁重建，跟随主题。
+// 材质可用时走 Mica 主窗呈现（全部内容 D2D 直绘）；否则回退实色呈现
+// （Win11 风格自绘按钮 + 标题栏融合）。
 func (t *Tray) ensureChooserWindow() {
 	_, dark := currentPalette()
 	if t.chooserWin != nil {
@@ -33,11 +35,15 @@ func (t *Tray) ensureChooserWindow() {
 		}
 		t.chooserWin.Dispose() // 主题变了：重建
 		t.chooserWin = nil
+		t.chooserMat = nil
+	}
+	if materialOK() && t.ensureChooserWindowMaterial(dark) {
+		return
 	}
 	pal, _ := currentPalette()
 
 	var w *walk.MainWindow
-	var btnWX, btnQQ *walk.PushButton
+	var hostWX, hostQQ *walk.Composite
 	err := MainWindow{
 		AssignTo:   &w,
 		Title:      "AirType · 选择绑定通道",
@@ -47,7 +53,7 @@ func (t *Tray) ensureChooserWindow() {
 		Children: []Widget{
 			Label{
 				Text:      "选择消息通道",
-				Font:      Font{Family: "Segoe UI", PointSize: 16, Bold: true},
+				Font:      Font{Family: DisplayFontFamily(), PointSize: 15, Bold: true},
 				TextColor: pal.Text,
 			},
 			// 说明分两行显式排版：walk Label 按单行测高，一整段长文案
@@ -61,33 +67,25 @@ func (t *Tray) ensureChooserWindow() {
 				TextColor: pal.TextSecondary,
 			},
 			Composite{
-				Layout: HBox{Margins: Margins{Left: 0, Top: 14, Right: 0, Bottom: 0}, Spacing: 16},
+				Layout: HBox{Margins: Margins{Left: 0, Top: 14, Right: 0, Bottom: 0}, Spacing: 12},
+				// MaxSize 钳住行高：按钮是自绘控件（带 GrowableVert 标志），
+				// 不钳会被拉伸抢走 VSpacer 的富余高度（实测撑到 2.5 倍）
+				MaxSize: Size{Height: 40},
 				Children: []Widget{
-					PushButton{
-						AssignTo:      &btnWX,
-						Text:          "微信",
-						MinSize:       Size{Width: 152, Height: 44},
+					// 按钮宿主：固定高度、横向等分，控件在 Create 后挂进来
+					Composite{
+						AssignTo:      &hostWX,
+						Layout:        HBox{MarginsZero: true, SpacingZero: true},
+						MinSize:       Size{Height: 40},
+						MaxSize:       Size{Height: 40},
 						StretchFactor: 1,
-						Font:          Font{Family: "Segoe UI", PointSize: 12},
-						OnClicked: func() {
-							w.Hide()
-							if t.cfg.ChooseChannel != nil {
-								t.cfg.ChooseChannel(ChoiceWeChat)
-							}
-						},
 					},
-					PushButton{
-						AssignTo:      &btnQQ,
-						Text:          "QQ 机器人",
-						MinSize:       Size{Width: 152, Height: 44},
+					Composite{
+						AssignTo:      &hostQQ,
+						Layout:        HBox{MarginsZero: true, SpacingZero: true},
+						MinSize:       Size{Height: 40},
+						MaxSize:       Size{Height: 40},
 						StretchFactor: 1,
-						Font:          Font{Family: "Segoe UI", PointSize: 12},
-						OnClicked: func() {
-							w.Hide()
-							if t.cfg.ChooseChannel != nil {
-								t.cfg.ChooseChannel(ChoiceQQ)
-							}
-						},
 					},
 				},
 			},
@@ -100,6 +98,23 @@ func (t *Tray) ensureChooserWindow() {
 	}
 	t.chooserWin = w
 	t.chooserDark = dark
+	// 微信 = 主按钮（强调色实底），QQ = 次级按钮（卡片底+描边）
+	if _, err := newFluentButton(hostWX, "微信", true, func() {
+		w.Hide()
+		if t.cfg.ChooseChannel != nil {
+			t.cfg.ChooseChannel(ChoiceWeChat)
+		}
+	}); err != nil {
+		t.cfg.Logger.Error("创建通道按钮失败", "err", err)
+	}
+	if _, err := newFluentButton(hostQQ, "QQ 机器人", false, func() {
+		w.Hide()
+		if t.cfg.ChooseChannel != nil {
+			t.cfg.ChooseChannel(ChoiceQQ)
+		}
+	}); err != nil {
+		t.cfg.Logger.Error("创建通道按钮失败", "err", err)
+	}
 	// 固定尺寸：流程窗不该被拉成全屏
 	win.FixWindowSize(uintptr(w.Handle()))
 	// 点 ✕ 只隐藏不销毁：walk 默认 WM_CLOSE 会 Dispose 窗口，
@@ -110,13 +125,7 @@ func (t *Tray) ensureChooserWindow() {
 	})
 	win.RoundCorners(uintptr(w.Handle()))
 	win.EnableDarkTitlebar(uintptr(w.Handle()), dark)
-	if dark {
-		// 深色窗口底上的原生按钮必须切深色主题，否则是刺眼的白色块
-		if btnWX != nil {
-			win.SetWindowThemeDark(uintptr(btnWX.Handle()))
-		}
-		if btnQQ != nil {
-			win.SetWindowThemeDark(uintptr(btnQQ.Handle()))
-		}
-	}
+	// 标题栏与窗口底同色、去描边：老对话框感的最大来源就地消除
+	win.SetWindowCaptionColor(uintptr(w.Handle()), uint32(pal.Window))
+	win.SetWindowNoBorder(uintptr(w.Handle()))
 }

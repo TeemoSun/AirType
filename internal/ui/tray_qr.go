@@ -29,6 +29,18 @@ func (t *Tray) ShowQRWindow(title, hint, imageURL string) {
 		if t.qrWin == nil {
 			return
 		}
+		// 材质呈现：文案与链接存状态，画布重绘（QR 矩阵已就位）
+		if t.qrMat != nil {
+			_ = t.qrWin.SetTitle("AirType · " + title)
+			t.qrTitleStr, t.qrHintStr, t.qrURL = title, hint, imageURL
+			t.qrMatrix = nil // 链接可能变化，下次绘制时重生成
+			if !t.qrWin.Visible() {
+				t.qrWin.Show()
+			}
+			t.qrShown = true
+			t.qrMat.redraw()
+			return
+		}
 		_ = t.qrWin.SetTitle("AirType · " + title)
 		_ = t.qrTitleLbl.SetText(title)
 		_ = t.qrHintLbl.SetText(hint)
@@ -72,7 +84,8 @@ func (t *Tray) HideQR() {
 
 // ensureQRWindow 惰性创建二维码窗口（必须在 UI 线程调用）。
 // 标题与提示文案由 ShowQRWindow 每次刷新（微信/QQ 共用此窗口）。
-// 注意：walk 窗口带子控件必须设 Layout，否则 WM_SIZE 时 startLayout 崩溃。
+// 窗口为 Win11 风格无边框圆角浮层：无系统标题栏，头部行自带 ✕，
+// 整面可拖动（子类化 NCHITTEST 返回 HTCAPTION）。
 func (t *Tray) ensureQRWindow() {
 	_, dark := currentPalette()
 	if t.qrWin != nil {
@@ -81,24 +94,43 @@ func (t *Tray) ensureQRWindow() {
 		}
 		t.qrWin.Dispose()
 		t.qrWin = nil
+		t.qrMat = nil
+	}
+	if materialOK() && t.ensureQRWindowMaterial(dark) {
+		return
 	}
 	pal, _ := currentPalette()
 
 	var w *walk.MainWindow
 	var iv *walk.ImageView
 	var ttl, hnt *walk.Label
+	var hostClose *walk.Composite
 	err := MainWindow{
 		AssignTo:   &w,
 		Title:      "AirType · 扫码绑定",
 		Size:       Size{Width: 420, Height: 520},
 		Background: SolidColorBrush{Color: pal.Window},
-		Layout:     VBox{Margins: Margins{Left: 24, Top: 28, Right: 24, Bottom: 24}, Spacing: 12},
+		Layout:     VBox{Margins: Margins{Left: 24, Top: 18, Right: 20, Bottom: 24}, Spacing: 12},
 		Children: []Widget{
-			Label{
-				AssignTo:  &ttl,
-				Text:      "",
-				Font:      Font{Family: "Segoe UI", PointSize: 15, Bold: true},
-				TextColor: pal.Text,
+			// 头部行：标题 + 关闭键（MaxSize 钳高，理由同历史弹窗头部）
+			Composite{
+				Layout:  HBox{MarginsZero: true, Spacing: 8},
+				MaxSize: Size{Height: 34},
+				Children: []Widget{
+					Label{
+						AssignTo:  &ttl,
+						Text:      "",
+						Font:      Font{Family: DisplayFontFamily(), PointSize: 12, Bold: true},
+						TextColor: pal.Text,
+					},
+					HSpacer{},
+					Composite{
+						AssignTo: &hostClose,
+						Layout:   HBox{MarginsZero: true, SpacingZero: true},
+						MinSize:  Size{Width: 34, Height: 28},
+						MaxSize:  Size{Width: 34, Height: 28},
+					},
+				},
 			},
 			Label{
 				AssignTo:  &hnt,
@@ -125,7 +157,19 @@ func (t *Tray) ensureQRWindow() {
 	t.qrTitleLbl = ttl
 	t.qrHintLbl = hnt
 	t.qrDark = dark
-	win.FixWindowSize(uintptr(w.Handle()))
+	// 无边框 + 强制圆角（Win11 风格浮层）
+	win.MakeBorderlessRoundedPopup(uintptr(w.Handle()))
+	// 整面可拖动：客户区全部按标题栏命中（子控件是独立 HWND，不受影响，
+	// ✕ 与二维码区域照常接收鼠标）
+	_ = win.SubclassWindow(uintptr(w.Handle()), func(msg uint32, wp, lp uintptr) (bool, uintptr) {
+		if msg == 0x0084 { // WM_NCHITTEST
+			return true, 2 // HTCAPTION
+		}
+		return false, 0
+	})
+	if _, err := newCloseButton(hostClose, func() { w.Close() }); err != nil {
+		t.cfg.Logger.Error("创建关闭键失败", "err", err)
+	}
 	// 点 ✕ 只隐藏不销毁；QQ 绑定流程据此取消
 	w.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		*canceled = true
@@ -134,6 +178,4 @@ func (t *Tray) ensureQRWindow() {
 			go t.cfg.QRDismissed() // 回调里做通道切换（可能阻塞），不卡 UI 线程
 		}
 	})
-	win.RoundCorners(uintptr(w.Handle()))
-	win.EnableDarkTitlebar(uintptr(w.Handle()), dark)
 }

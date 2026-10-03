@@ -37,14 +37,14 @@ func (t *Tray) PopupIsShownForTest() bool {
 // PopupCopyForTest 复制弹窗第 i 条（模拟单击条目），供剪贴板回读验证。线程安全。
 func (t *Tray) PopupCopyForTest(i int) {
 	t.mw.Synchronize(func() {
-		if t.popup == nil {
+		if t.popup == nil || t.popup.list == nil {
 			return
 		}
-		id, ok := t.popup.itemIDAt(i)
-		if !ok {
+		items := t.popup.list.items
+		if i < 0 || i >= len(items) {
 			return
 		}
-		t.popup.copyAt(id)
+		t.popup.copyAt(items[i].id)
 	})
 }
 

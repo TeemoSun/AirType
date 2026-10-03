@@ -66,26 +66,14 @@ const (
 	flRelTimeTick  = 30 * time.Second        // 相对时间刷新间隔
 )
 
-// historyPopup 是 Win11 风格的无边框圆角历史浮层（方案 §4.1/§10.5）。
-// 存在两种呈现：材质呈现（mat 非 nil，Acrylic + 全 D2D 绘制，见
-// popup_material.go）与实色呈现（walk 控件 + GDI/DWrite，下方的
-// fluentList 等）；状态与业务逻辑两者共用。
+// historyPopup 是 OneDrive 风格的无边框圆角历史浮层（方案 §4.1）。
 type historyPopup struct {
-	tray     *Tray
-	win      *walk.MainWindow
-	list     *fluentList
-	snapshot win.FocusSnapshot
-	badge    *statusBadge // 状态胶囊（圆点+状态文字）
-	closeBtn *closeButton
-	pal      Palette
-
-	// 材质呈现专用状态
-	mat           *matCanvas
-	matList       *matListState
-	matCloseHover bool
-	matEndLogged  bool
-	copiedID      int64
-	copiedAt      time.Time
+	tray      *Tray
+	win       *walk.MainWindow
+	list      *fluentList
+	snapshot  win.FocusSnapshot
+	statusLbl *walk.Label // 状态点 ●
+	statusTxt *walk.Label // 状态文字（含"已暂停/新消息"闪现）
 
 	flashMsg     string
 	flashUntil   time.Time
@@ -102,15 +90,11 @@ func (t *Tray) ensureHistoryPopup() {
 		t.popup.win.Dispose()
 		t.popup = nil
 	}
-	// 材质呈现优先（Acrylic）；不可用时回退实色呈现
-	if materialOK() && t.ensureHistoryPopupMaterial(dark) {
-		return
-	}
 	pal, _ := currentPalette()
 
 	p := &historyPopup{tray: t}
 	var w *walk.MainWindow
-	var badgeHost, closeHost *walk.Composite
+	var status, statusText *walk.Label
 	var listHost *walk.Composite
 
 	err := MainWindow{
@@ -125,32 +109,15 @@ func (t *Tray) ensureHistoryPopup() {
 			}
 		},
 		Children: []Widget{
-			// 标题行：产品名 + 状态胶囊 + 关闭键
-			// MaxSize 钳住行高：行内的自绘控件带 GrowableVert 布局标志，
-			// 不钳会跟列表区平分窗口富余高度（头部被撑到半屏高，实测）
+			// 标题行：产品名 + 状态点 + 状态文字（关闭走 Esc/失焦，不放关闭按钮）
 			Composite{
 				Background: SolidColorBrush{Color: pal.Window},
-				Layout:     HBox{Margins: Margins{Left: 16, Top: 14, Right: 12, Bottom: 8}, Spacing: 8},
-				MaxSize:    Size{Height: 50},
+				Layout:     HBox{Margins: Margins{Left: 20, Top: 14, Right: 20, Bottom: 8}, Spacing: 6},
 				Children: []Widget{
-					Label{
-						Text:      "AirType",
-						Font:      Font{Family: DisplayFontFamily(), PointSize: 12, Bold: true},
-						TextColor: pal.Text,
-					},
+					Label{Text: "AirType", Font: Font{Family: "Segoe UI", PointSize: 14, Bold: true}, TextColor: pal.Text},
+					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
+					Label{AssignTo: &statusText, Text: "未绑定", TextColor: pal.TextSecondary},
 					HSpacer{},
-					Composite{
-						AssignTo: &badgeHost,
-						Layout:   HBox{MarginsZero: true, SpacingZero: true},
-						MinSize:  Size{Width: 136, Height: 24},
-						MaxSize:  Size{Width: 136, Height: 24},
-					},
-					Composite{
-						AssignTo: &closeHost,
-						Layout:   HBox{MarginsZero: true, SpacingZero: true},
-						MinSize:  Size{Width: 30, Height: 24},
-						MaxSize:  Size{Width: 30, Height: 24},
-					},
 				},
 			},
 			// 列表宿主：自绘 Fluent 列表挂到这里；StretchFactor=1 占满
@@ -164,13 +131,9 @@ func (t *Tray) ensureHistoryPopup() {
 			// 底部提示
 			Composite{
 				Background: SolidColorBrush{Color: pal.Window},
-				Layout:     HBox{Margins: Margins{Left: 16, Top: 8, Right: 16, Bottom: 12}},
+				Layout:     HBox{Margins: Margins{Left: 20, Top: 8, Right: 20, Bottom: 12}},
 				Children: []Widget{
-					Label{
-						Text:      "单击复制 · 右键复制/删除/重新打字",
-						Font:      Font{Family: UIFontFamily(), PointSize: 8},
-						TextColor: pal.TextSecondary,
-					},
+					Label{Text: "单击复制 · 右键复制/删除/重新打字", TextColor: pal.TextSecondary},
 					HSpacer{},
 				},
 			},
@@ -181,23 +144,12 @@ func (t *Tray) ensureHistoryPopup() {
 		return
 	}
 	p.win = w
+	p.statusLbl = status
+	p.statusTxt = statusText
 
 	// 无边框 + 圆角（Win11 风格浮层）
 	win.MakeTopmostToolWindow(uintptr(w.Handle()))
 	win.MakeBorderlessRoundedPopup(uintptr(w.Handle()))
-
-	badge, err := newStatusBadge(badgeHost, p)
-	if err != nil {
-		t.cfg.Logger.Error("创建状态胶囊失败", "err", err)
-		return
-	}
-	p.badge = badge
-	closeBtn, err := newCloseButton(closeHost, func() { p.hide() })
-	if err != nil {
-		t.cfg.Logger.Error("创建关闭键失败", "err", err)
-		return
-	}
-	p.closeBtn = closeBtn
 
 	fl, err := newFluentList(listHost, p)
 	if err != nil {
@@ -238,16 +190,13 @@ func (p *historyPopup) dotColor() walk.Color {
 	}
 }
 
-// updateHeader 刷新状态呈现（须在 UI 线程调用）。
+// updateHeader 刷新状态点与文字（须在 UI 线程调用）。
 func (p *historyPopup) updateHeader() {
-	if p.mat != nil {
-		p.mat.redraw()
+	if p.statusLbl == nil {
 		return
 	}
-	if p.badge == nil {
-		return
-	}
-	p.badge.w.Invalidate()
+	p.statusLbl.SetTextColor(p.dotColor())
+	p.statusTxt.SetText(p.statusText())
 }
 
 // flash 在头部短暂显示一条提示（如"新消息已入历史"），到时自动恢复。
@@ -270,9 +219,7 @@ func (p *historyPopup) show() {
 	p.updateHeader()
 	p.win.Show()
 	p.anchor()
-	if p.mat != nil {
-		p.mat.focus()
-	} else if p.list != nil {
+	if p.list != nil {
 		p.list.Focus()
 	}
 	p.tray.popupVisible.Store(true)
@@ -319,39 +266,16 @@ func (p *historyPopup) hide() {
 }
 
 func (p *historyPopup) reload() {
-	if p.tray.cfg.History == nil {
+	if p.tray.cfg.History == nil || p.list == nil {
 		return
 	}
 	entries := p.tray.cfg.History.All()
-	if p.mat != nil {
-		p.matList.items = make([]fluentItem, len(entries))
-		for i, e := range entries {
-			p.matList.items[i] = fluentItem{
-				id:   e.ID,
-				text: clampText(e.Text, flMaxTextRunes),
-				full: e.Text,
-				at:   e.ReceivedAt,
-			}
-		}
-		p.refreshTimes()
-		return
-	}
-	if p.list == nil {
-		return
-	}
 	p.list.setItems(entries)
 	p.refreshTimes()
 }
 
 // refreshTimes 重算相对时间并重绘（须在 UI 线程调用）。
 func (p *historyPopup) refreshTimes() {
-	if p.mat != nil {
-		for i := range p.matList.items {
-			p.matList.items[i].timeStr = relTime(p.matList.items[i].at)
-		}
-		p.mat.redraw()
-		return
-	}
 	if p.list == nil {
 		return
 	}
@@ -359,20 +283,6 @@ func (p *historyPopup) refreshTimes() {
 		p.list.items[i].timeStr = relTime(p.list.items[i].at)
 	}
 	p.list.w.Invalidate()
-}
-
-// itemIDAt 返回第 i 个条目的 ID（两种呈现通用，测试钩子用）。
-func (p *historyPopup) itemIDAt(i int) (int64, bool) {
-	if p.mat != nil {
-		if i < 0 || i >= len(p.matList.items) {
-			return 0, false
-		}
-		return p.matList.items[i].id, true
-	}
-	if p.list == nil || i < 0 || i >= len(p.list.items) {
-		return 0, false
-	}
-	return p.list.items[i].id, true
 }
 
 // copyAt 按条目 ID 复制文本到剪贴板（列表索引可能因新消息插入而漂移，
@@ -408,19 +318,6 @@ func (p *historyPopup) copyAt(id int64) {
 				return
 			}
 			p.tray.cfg.Logger.Info("已复制", "chars", len([]rune(text)))
-			if p.mat != nil {
-				// 行内"已复制 ✓"：时间行临时替换，到时还原
-				p.copiedID, p.copiedAt = idc, time.Now()
-				p.mat.redraw()
-				time.AfterFunc(flCopyFlash+150*time.Millisecond, func() {
-					p.tray.mw.Synchronize(func() {
-						if time.Since(p.copiedAt) >= flCopyFlash {
-							p.mat.redraw()
-						}
-					})
-				})
-				return
-			}
 			if p.list != nil {
 				p.list.markCopied(idc)
 			}
@@ -501,74 +398,6 @@ func (p *historyPopup) startFocusWatch() {
 	}()
 }
 
-// statusBadge 是头部的状态胶囊：圆点 + 状态文字，卡片底全圆角、描边。
-// 状态变化经 updateHeader → Invalidate 重绘。
-type statusBadge struct {
-	w   *walk.CustomWidget
-	p   *historyPopup
-	pal Palette
-	fnt *walk.Font
-}
-
-func newStatusBadge(host walk.Container, p *historyPopup) (*statusBadge, error) {
-	pal, _ := currentPalette()
-	b := &statusBadge{p: p, pal: pal}
-	var err error
-	if b.fnt, err = walk.NewFont(UIFontFamily(), 9, 0); err != nil {
-		return nil, err
-	}
-	w, err := walk.NewCustomWidgetPixels(host, 0, b.paint)
-	if err != nil {
-		return nil, err
-	}
-	b.w = w
-	if _, err = newWidgetBrush(w, pal.Window); err != nil {
-		return nil, err
-	}
-	return b, nil
-}
-
-func (b *statusBadge) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
-	dpi := b.w.DPI()
-	ell := walk.Size{Width: bounds.Height, Height: bounds.Height} // 全圆角胶囊
-	bg, err := walk.NewSolidColorBrush(b.pal.Card)
-	if err != nil {
-		return err
-	}
-	defer bg.Dispose()
-	if err := canvas.FillRoundedRectanglePixels(bg, bounds, ell); err != nil {
-		return err
-	}
-	pen, err := walk.NewCosmeticPen(walk.PenSolid, b.pal.Stroke)
-	if err != nil {
-		return err
-	}
-	defer pen.Dispose()
-	if err := canvas.DrawRoundedRectanglePixels(pen, bounds, ell); err != nil {
-		return err
-	}
-	d := walk.IntFrom96DPI(8, dpi)
-	padX := walk.IntFrom96DPI(10, dpi)
-	cy := bounds.Y + bounds.Height/2
-	dotBrush, err := walk.NewSolidColorBrush(b.p.dotColor())
-	if err != nil {
-		return err
-	}
-	defer dotBrush.Dispose()
-	if err := canvas.FillEllipsePixels(dotBrush,
-		walk.Rectangle{X: bounds.X + padX, Y: cy - d/2, Width: d, Height: d}); err != nil {
-		return err
-	}
-	txtR := walk.Rectangle{
-		X:      bounds.X + padX + d + walk.IntFrom96DPI(6, dpi),
-		Y:      bounds.Y,
-		Width:  bounds.Width - padX*2 - d - walk.IntFrom96DPI(6, dpi),
-		Height: bounds.Height,
-	}
-	return canvas.DrawTextPixels(b.p.statusText(), b.fnt, b.pal.TextSecondary, txtR,
-		walk.TextVCenter|walk.TextSingleLine)
-}
-
 // fluentItem 是列表条目。
 type fluentItem struct {
 	id      int64
@@ -578,10 +407,9 @@ type fluentItem struct {
 	at      time.Time
 }
 
-// fluentList 是自绘的 Fluent 风格列表：无网格线，悬停/选中为圆角高亮
-// （选中行另有强调色左标），每条两行（内容 + 相对时间/已复制），滚轮
-// 翻页，右侧迷你滚动条，左键复制、右键菜单（复制/删除/重新打字），
-// 键盘 ↑↓ 导航。
+// fluentList 是自绘的 Fluent 风格列表：无网格线，悬停/选中高亮，
+// 每条两行（内容 + 相对时间/已复制），滚轮翻页，右侧迷你滚动条，
+// 左键复制、右键菜单（复制/删除/重新打字），键盘 ↑↓ 导航。
 type fluentList struct {
 	w        *walk.CustomWidget
 	p        *historyPopup
@@ -595,13 +423,12 @@ type fluentList struct {
 	copiedID int64
 	copiedAt time.Time
 
-	fntText  *walk.Font
-	fntTime  *walk.Font
-	brHover  *walk.SolidColorBrush
-	brSel    *walk.SolidColorBrush
-	brAccent *walk.SolidColorBrush
-	brThumb  *walk.SolidColorBrush
-	brBkgnd  *walk.SolidColorBrush
+	fntText *walk.Font
+	fntTime *walk.Font
+	brHover *walk.SolidColorBrush
+	brSel   *walk.SolidColorBrush
+	brThumb *walk.SolidColorBrush
+	brBkgnd *walk.SolidColorBrush
 }
 
 func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) {
@@ -609,19 +436,16 @@ func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) 
 	fl := &fluentList{p: p, pal: pal, hover: -1, sel: -1, copiedID: -1}
 
 	var err error
-	if fl.fntText, err = walk.NewFont(UIFontFamily(), 10, 0); err != nil {
+	if fl.fntText, err = walk.NewFont("Segoe UI", 9, 0); err != nil {
 		return nil, err
 	}
-	if fl.fntTime, err = walk.NewFont(UIFontFamily(), 8, 0); err != nil {
+	if fl.fntTime, err = walk.NewFont("Segoe UI", 8, 0); err != nil {
 		return nil, err
 	}
 	if fl.brHover, err = walk.NewSolidColorBrush(pal.Hover); err != nil {
 		return nil, err
 	}
 	if fl.brSel, err = walk.NewSolidColorBrush(pal.Selection); err != nil {
-		return nil, err
-	}
-	if fl.brAccent, err = walk.NewSolidColorBrush(pal.Accent); err != nil {
 		return nil, err
 	}
 	if fl.brThumb, err = walk.NewSolidColorBrush(pal.ScrollThumb); err != nil {
@@ -852,10 +676,6 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	dpi := fl.w.DPI()
 	rowH := fl.rowHPixels()
 	pad := walk.IntFrom96DPI(flTextPad96, dpi)
-	// 行高亮的圆角与左右内缩随 DPI 缩放
-	rowInset := walk.IntFrom96DPI(6, dpi)
-	radius := walk.IntFrom96DPI(4, dpi)
-	rowEll := walk.Size{Width: radius * 2, Height: radius * 2}
 
 	// 整面铺主题底色：与 SetBackground 双保险，深色主题绝不露白底
 	if fl.brBkgnd != nil {
@@ -876,11 +696,9 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	fl.clampScroll()
 
 	y := 0
-	// 只画完整可见行：半截行会在视口底边被拦腰裁断（实测只剩文字无时间行）
-	for i := fl.scroll; i < len(fl.items) && y+rowH <= bounds.Height; i++ {
+	for i := fl.scroll; i < len(fl.items) && y < bounds.Height; i++ {
 		it := fl.items[i]
 		// 行背景：键盘选中 > 悬停 > 无（去掉斑马纹：Fluent 列表靠悬停不靠条纹）
-		// 高亮为 4px 圆角（Win11 列表项），不再是通栏方块
 		var brush walk.Brush
 		if i == fl.sel {
 			brush = fl.brSel
@@ -888,26 +706,9 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 			brush = fl.brHover
 		}
 		if brush != nil {
-			rect := walk.Rectangle{
-				X: rowInset, Y: y + 2,
-				Width:  bounds.Width - rowInset*2,
-				Height: rowH - 4,
-			}
-			if err := canvas.FillRoundedRectanglePixels(brush, rect, rowEll); err != nil {
+			rect := walk.Rectangle{X: 6, Y: y + 2, Width: bounds.Width - 12, Height: rowH - 4}
+			if err := canvas.FillRectanglePixels(brush, rect); err != nil {
 				return err
-			}
-			// 选中行：左缘强调色竖标（Win11 选中态的"点睛"）
-			if i == fl.sel {
-				pillW := walk.IntFrom96DPI(3, dpi)
-				pillH := rowH - walk.IntFrom96DPI(16, dpi)
-				pillR := walk.Rectangle{
-					X: rect.X + walk.IntFrom96DPI(4, dpi), Y: y + (rowH-pillH)/2,
-					Width: pillW, Height: pillH,
-				}
-				pillEll := walk.Size{Width: pillW * 2, Height: pillW * 2}
-				if err := canvas.FillRoundedRectanglePixels(fl.brAccent, pillR, pillEll); err != nil {
-					return err
-				}
 			}
 		}
 		// 第一行：内容
@@ -935,7 +736,7 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		y += rowH
 	}
 
-	// 迷你滚动条：内容溢出时在右缘显示 3px 圆头滑块（不够圆角时退化为方角）
+	// 迷你滚动条：内容溢出时在右缘显示 4px 圆头滑块
 	if total := len(fl.items); total > fl.visRows && fl.visRows > 0 {
 		thumbH := bounds.Height * fl.visRows / total
 		if thumbH < 24 {
@@ -946,15 +747,8 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		if maxScroll > 0 {
 			thumbY = (bounds.Height - thumbH) * fl.scroll / maxScroll
 		}
-		thumbW := walk.IntFrom96DPI(3, dpi)
-		thumbX := bounds.Width - thumbW - walk.IntFrom96DPI(4, dpi)
-		thumbR := walk.Rectangle{X: thumbX, Y: thumbY, Width: thumbW, Height: thumbH}
-		if thumbH >= thumbW*2 {
-			thumbEll := walk.Size{Width: thumbW * 2, Height: thumbW * 2}
-			if err := canvas.FillRoundedRectanglePixels(fl.brThumb, thumbR, thumbEll); err != nil {
-				return err
-			}
-		} else if err := canvas.FillRectanglePixels(fl.brThumb, thumbR); err != nil {
+		rect := walk.Rectangle{X: bounds.Width - 6, Y: thumbY, Width: 4, Height: thumbH}
+		if err := canvas.FillRectanglePixels(fl.brThumb, rect); err != nil {
 			return err
 		}
 	}
@@ -966,6 +760,8 @@ func (fl *fluentList) emptyText() string {
 	switch fl.p.tray.mode {
 	case ChannelQQ:
 		return "暂无消息，用手机 QQ 发一条试试"
+	case ChannelWeChat:
+		return "暂无消息，用手机微信发一条试试"
 	default:
 		return "暂无消息，绑定通道后用手机发一条试试"
 	}

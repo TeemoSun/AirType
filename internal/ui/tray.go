@@ -115,18 +115,12 @@ type Tray struct {
 	paused       bool
 	lastReceived time.Time
 
-	chooserWin                   *walk.MainWindow
-	chooserMat                   *matCanvas // 材质呈现画布（nil = 实色呈现）
-	chooserHover, chooserPressed int
-	qrWin                        *walk.MainWindow
-	qrMat                        *matCanvas // 材质呈现画布（nil = 实色呈现）
-	qrCloseHover                 bool
-	qrTitleStr, qrHintStr, qrURL string
-	qrMatrix                     [][]bool // 二维码模块矩阵（材质呈现用，链接变化时置空重生成）
-	qrView                       *walk.ImageView
-	qrTitleLbl                   *walk.Label
-	qrHintLbl                    *walk.Label
-	qrShown                      bool
+	chooserWin *walk.MainWindow
+	qrWin      *walk.MainWindow
+	qrView     *walk.ImageView
+	qrTitleLbl *walk.Label
+	qrHintLbl  *walk.Label
+	qrShown    bool
 
 	// 各惰性窗口创建时的深浅色；不一致时销毁重建，跟随系统主题切换。
 	chooserDark, qrDark, popupDark bool
@@ -137,8 +131,6 @@ func NewTray(cfg Config) (*Tray, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	// 原生菜单跟随系统深浅色（Win10 1809+；浅色下无感，深色下不再发白）
-	win.EnableDarkMenus()
 	t := &Tray{cfg: cfg, state: StateIdle}
 
 	mw, err := walk.NewMainWindow()

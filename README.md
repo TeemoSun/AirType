@@ -38,7 +38,6 @@ flowchart LR
 - **微信 / QQ 双通道可选**：微信或 QQ 二选一（互斥、完全对等）。未绑定时弹出通道选择窗口，扫码即绑定；QQ 走官方机器人（WebSocket 实时推送 + 断线自动恢复会话），手机 QQ 发私聊同样隔空打字。换绑：托盘菜单"切换通道…"→ 回到选择窗口
 - **常驻托盘**：四态图标一眼看清状态（绿=正常 / 灰=未绑定 / 黄=待扫码或异常 / 红=凭据失效），无需控制台窗口
 - **历史弹窗**：OneDrive / Fluent 风格圆角弹窗，左键托盘即出；单击复制（行内"已复制"反馈）、右键复制 / 删除 / 重新打字、悬停看全文、键盘 ↑↓/Enter/Delete、迷你滚动条、失焦或 Esc 关闭
-- **Win11 材质界面**：通道选择窗 Mica、历史弹窗与扫码窗 Acrylic——系统级毛玻璃，跟随系统深浅色（失焦自动降饱和）；按钮、状态徽章等按 Fluent 规范自绘，强调色取自 Windows 主题色，Segoe UI Variable 字体；旧系统自动回退实色风格
 - **彩色 emoji**：消息行 DirectWrite 渲染，😀🚀 与手机端同观感
 - **深色模式**：自动跟随系统深浅色（含弹窗、窗口标题栏）
 - **暂停打字 / 自动回车**：只记录不注入、打完自动补回车发送；都是托盘菜单开关，重启后记住状态
@@ -102,7 +101,7 @@ scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检�
 | :--- | :--- |
 | 消息通道 | 微信：iLink 协议（`ilinkai.weixin.qq.com`）长轮询，端到端约 0.5~2 秒；QQ：官方机器人平台 WebSocket 推送（实测体感更快），空闲超时续期 + RESUME 会话恢复 + 退避复位，断线窗口消息不丢 |
 | 键盘注入 | `SendInput` + `KEYEVENTF_UNICODE`，UTF-16 代理对完整支持 Emoji，换行折叠为回车 |
-| 界面 | `lxn/walk` 原生 Win32 控件 + 自绘列表；Win11 22H2+ 上 Mica/Acrylic 系统材质，可见内容全部 Direct2D 直绘（彩色 emoji），系统强调色点睛；旧系统自动回退实色主题；深浅色自动跟随 |
+| 界面 | `lxn/walk` 原生 Win32 控件 + 自绘列表，Win11 DWM 圆角无边框弹窗；消息行 DirectWrite 渲染（彩色 emoji）；深浅色主题自动跟随 |
 | 稳定性 | 单实例互斥锁、注入分批提交、看门狗健康检测、退出 2 秒兜底超时、托盘图标守护（任务栏重建/二次启动自动重挂）、微信/QQ 断线自动重连 |
 | 安全 | 凭据 DPAPI 加密落盘、QQ 消息按绑定者 openid 过滤、错误气泡不泄漏内部信息 |
 | 构建 | `CGO_ENABLED=0` 静态编译单文件，`.syso` 资源直接进 Git，CI 自动校验（vet/test/gofmt/tidy） |
@@ -115,7 +114,6 @@ scripts/build.sh uishot   # 拉起真实 UI 截图到 %TEMP%（改 UI 后自检�
 - [x] **v1.1** 托盘常驻：多态图标、扫码 GUI 化、暂停打字、自动回车、开机自启、QQ 通道
 - [x] **历史弹窗**：Fluent 圆角弹窗、复制 / 删除 / 重新打字、键盘导航、深色模式、彩色 emoji
 - [x] **v1.2** 质量与体验大版本：QQ 网关断线治理（空闲超时 + RESUME）、DPAPI 凭据加密、UI 全面重构、CI/版本工程化
-- [x] **v1.2** Win11 现代化：Mica/Acrylic 系统材质、系统强调色、Segoe UI Variable、Fluent 自绘控件（按钮/徽章/圆角高亮）、无边框扫码窗、原生菜单深色化
 - [x] **v1.2** QQ 通道：微信/QQ 完全对等二选一、通道选择窗口、扫码绑定 QQ 官方机器人（WebSocket）；自动回车、托盘图标守护、网络抖动优化
 
 ## ⚠️ 免责声明
@@ -180,11 +178,6 @@ WeChat and your PC has internet, it works from anywhere.
 - **History popup** — Fluent-style rounded popup from a tray click: copy on click
   (inline "copied" feedback), right-click for copy / delete / retype, full text
   on hover, keyboard navigation, mini scrollbar, closes on focus loss or Esc
-- **Windows 11 materials** — Mica on the channel chooser, Acrylic on the history
-  popup and QR window: system-level translucent materials that follow the
-  light/dark theme (and desaturate while unfocused). Buttons, badges and
-  highlights are drawn to Fluent specs with your Windows accent color and
-  Segoe UI Variable typography; older systems fall back to solid styling
 - **Color emoji** — message rows rendered with DirectWrite, 😀🚀 look like they do on your phone
 - **Dark mode** — follows the system light/dark theme automatically
 - **Pause typing / Auto-Enter** — record-only mode and send-after-typing; both are
@@ -264,7 +257,7 @@ scripts/build.sh uishot   # screenshot the real UI to %TEMP% for visual checks
 | :--- | :--- |
 | Message channel | WeChat: iLink protocol (`ilinkai.weixin.qq.com`) long polling, ~0.5–2s end-to-end; QQ: official bot platform WebSocket push (noticeably faster in practice) with idle-timeout keepalive, session RESUME and backoff reset — no messages lost across reconnects |
 | Keyboard injection | `SendInput` + `KEYEVENTF_UNICODE` with full UTF-16 surrogate-pair emoji support, newline→Enter folding |
-| UI | `lxn/walk` native Win32 controls + custom-drawn list; on Windows 11 22H2+ Mica/Acrylic system materials with all visible content drawn via Direct2D (color emoji), accented by your Windows theme color; solid-theme fallback on older systems; automatic light/dark theming |
+| UI | `lxn/walk` native Win32 controls + custom-drawn list, Win11 DWM rounded borderless popup; DirectWrite text rows (color emoji); automatic light/dark theming |
 | Robustness | single-instance mutex, batched input submission, health watchdog, 2s shutdown timeout, tray-icon guard (auto re-add on taskbar restart / second launch), auto-reconnect for both channels |
 | Security | DPAPI-sealed credentials on disk, QQ messages filtered by the binding user's openid, error balloons never leak internals |
 | Build | `CGO_ENABLED=0` static single binary, `.syso` resources committed, CI on every push (vet/test/gofmt/tidy), PE version injected from the release tag |
@@ -281,9 +274,6 @@ Full design docs (in Chinese): [docs/开发方案.md](docs/开发方案.md).
 - [x] **v1.2** quality & experience release — QQ gateway disconnect hardening
   (idle timeout + RESUME), DPAPI credential sealing, full UI overhaul,
   CI/versioning engineering
-- [x] **v1.2** Windows 11 modernization — Mica/Acrylic system materials, system
-  accent color, Segoe UI Variable, Fluent-drawn controls (buttons, badges,
-  rounded highlights), borderless QR window, dark-aware native menus
 
 ## ⚠️ Disclaimer
 

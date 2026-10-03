@@ -56,7 +56,7 @@ func (t *Tray) ShowQRWindow(title, hint, imageURL string) {
 			t.cfg.Logger.Error("创建二维码位图失败", "err", err)
 			return
 		}
-		t.qrView.SetImage(bmp)
+		t.qrCard.setImage(bmp, px)
 		t.qrShown = true
 	})
 }
@@ -85,7 +85,7 @@ func (t *Tray) ensureQRWindow() {
 	pal, _ := currentPalette()
 
 	var w *walk.MainWindow
-	var iv *walk.ImageView
+	var cardHost *walk.Composite
 	var ttl, hnt *walk.Label
 	err := MainWindow{
 		AssignTo:   &w,
@@ -97,7 +97,7 @@ func (t *Tray) ensureQRWindow() {
 			Label{
 				AssignTo:  &ttl,
 				Text:      "",
-				Font:      Font{Family: "Segoe UI", PointSize: 15, Bold: true},
+				Font:      Font{Family: DisplayFontFamily(), PointSize: 15, Bold: true},
 				TextColor: pal.Text,
 			},
 			Label{
@@ -105,14 +105,11 @@ func (t *Tray) ensureQRWindow() {
 				Text:      "",
 				TextColor: pal.TextSecondary,
 			},
-			// 二维码居中 + Zoom 模式：按控件可用空间等比缩放，
-			// 不再依赖 ImageView 的 Ideal 尺寸链路
-			ImageView{
-				AssignTo:      &iv,
-				Mode:          ImageViewModeZoom,
-				MinSize:       Size{Width: qrLogicalSize, Height: qrLogicalSize},
+			// 二维码卡片宿主：qrCard 自绘控件占满剩余高度
+			Composite{
+				AssignTo:      &cardHost,
+				Layout:        VBox{MarginsZero: true, SpacingZero: true},
 				StretchFactor: 1,
-				Margin:        12,
 			},
 		},
 	}.Create()
@@ -120,8 +117,13 @@ func (t *Tray) ensureQRWindow() {
 		t.cfg.Logger.Error("创建二维码窗口失败", "err", err)
 		return
 	}
+	card, err := newQRCard(cardHost, pal)
+	if err != nil {
+		t.cfg.Logger.Error("创建二维码卡片失败", "err", err)
+		return
+	}
 	t.qrWin = w
-	t.qrView = iv
+	t.qrCard = card
 	t.qrTitleLbl = ttl
 	t.qrHintLbl = hnt
 	t.qrDark = dark
@@ -136,4 +138,62 @@ func (t *Tray) ensureQRWindow() {
 	})
 	win.RoundCorners(uintptr(w.Handle()))
 	win.EnableDarkTitlebar(uintptr(w.Handle()), dark)
+	win.SetCaptionColor(uintptr(w.Handle()), uint32(pal.Window))
+	win.SetBorderColor(uintptr(w.Handle()), uint32(pal.Stroke))
+}
+
+// qrCard 是二维码的自绘展示卡片：白底圆角卡（二维码对比度需要白底，
+// 描边让它在浅色窗口底上也有清晰边界），二维码位图 1:1 居中。
+// 纯展示、零交互——不挂任何鼠标事件，不存在误点面。
+type qrCard struct {
+	w        *walk.CustomWidget
+	pal      Palette
+	bmp      *walk.Bitmap
+	bmpSize  int // 位图物理边长（二维码是正方形）
+	brWindow *walk.SolidColorBrush
+}
+
+func newQRCard(host walk.Container, pal Palette) (*qrCard, error) {
+	q := &qrCard{pal: pal}
+	var err error
+	if q.brWindow, err = walk.NewSolidColorBrush(pal.Window); err != nil {
+		return nil, err
+	}
+	w, err := walk.NewCustomWidgetPixels(host, 0, q.paint)
+	if err != nil {
+		return nil, err
+	}
+	q.w = w
+	w.SetBackground(q.brWindow)
+	return q, nil
+}
+
+// setImage 更新二维码位图（旧位图即弃，sizePixels 为位图物理边长，
+// 须在 UI 线程调用）。
+func (q *qrCard) setImage(bmp *walk.Bitmap, sizePixels int) {
+	if q.bmp != nil {
+		q.bmp.Dispose()
+	}
+	q.bmp, q.bmpSize = bmp, sizePixels
+	q.w.Invalidate()
+}
+
+func (q *qrCard) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
+	bounds := q.w.ClientBoundsPixels()
+	// 卡片 = 以客户区中心为基准的方形区域，二维码四周留 12 逻辑像素白边
+	cx, cy := bounds.X+bounds.Width/2, bounds.Y+bounds.Height/2
+	qrSize := q.bmpSize
+	if qrSize <= 0 {
+		qrSize = qrLogicalSize * q.w.DPI() / 96
+	}
+	pad := walk.IntFrom96DPI(12, q.w.DPI())
+	cardSize := qrSize + 2*pad
+	card := walk.Rectangle{X: cx - cardSize/2, Y: cy - cardSize/2, Width: cardSize, Height: cardSize}
+	if err := strokeRoundRect(canvas, card, 8, q.pal.Stroke, walk.RGB(255, 255, 255)); err != nil {
+		return err
+	}
+	if q.bmp != nil {
+		return canvas.DrawImagePixels(q.bmp, walk.Point{X: cx - qrSize/2, Y: cy - qrSize/2})
+	}
+	return nil
 }

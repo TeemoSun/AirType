@@ -37,17 +37,22 @@ func (t *Tray) ensureChooserWindow() {
 	pal, _ := currentPalette()
 
 	var w *walk.MainWindow
-	var btnWX, btnQQ *walk.PushButton
+	var hostWX, hostQQ *walk.Composite
 	err := MainWindow{
 		AssignTo:   &w,
 		Title:      "AirType · 选择绑定通道",
-		Size:       Size{Width: 400, Height: 300},
+		Size:       Size{Width: 430, Height: 330},
 		Background: SolidColorBrush{Color: pal.Window},
-		Layout:     VBox{Margins: Margins{Left: 32, Top: 30, Right: 32, Bottom: 28}, Spacing: 10},
+		Layout:     VBox{Margins: Margins{Left: 24, Top: 26, Right: 24, Bottom: 24}, Spacing: 8},
+		OnKeyDown: func(key walk.Key) {
+			if key == walk.KeyEscape {
+				w.Hide()
+			}
+		},
 		Children: []Widget{
 			Label{
 				Text:      "选择消息通道",
-				Font:      Font{Family: "Segoe UI", PointSize: 16, Bold: true},
+				Font:      Font{Family: DisplayFontFamily(), PointSize: 16, Bold: true},
 				TextColor: pal.Text,
 			},
 			// 说明分两行显式排版：walk Label 按单行测高，一整段长文案
@@ -60,34 +65,21 @@ func (t *Tray) ensureChooserWindow() {
 				Text:      "换绑通道：托盘右键 → 切换通道。",
 				TextColor: pal.TextSecondary,
 			},
+			// 双通道卡片行：host 给出固定卡片尺寸，卡片控件铺满 host。
 			Composite{
-				Layout: HBox{Margins: Margins{Left: 0, Top: 14, Right: 0, Bottom: 0}, Spacing: 16},
+				Layout: HBox{Margins: Margins{Left: 0, Top: 12, Right: 0, Bottom: 0}, Spacing: 14},
 				Children: []Widget{
-					PushButton{
-						AssignTo:      &btnWX,
-						Text:          "微信",
-						MinSize:       Size{Width: 152, Height: 44},
+					Composite{
+						AssignTo:      &hostWX,
+						MinSize:       Size{Width: 165, Height: 132},
 						StretchFactor: 1,
-						Font:          Font{Family: "Segoe UI", PointSize: 12},
-						OnClicked: func() {
-							w.Hide()
-							if t.cfg.ChooseChannel != nil {
-								t.cfg.ChooseChannel(ChoiceWeChat)
-							}
-						},
+						Layout:        VBox{MarginsZero: true, SpacingZero: true},
 					},
-					PushButton{
-						AssignTo:      &btnQQ,
-						Text:          "QQ 机器人",
-						MinSize:       Size{Width: 152, Height: 44},
+					Composite{
+						AssignTo:      &hostQQ,
+						MinSize:       Size{Width: 165, Height: 132},
 						StretchFactor: 1,
-						Font:          Font{Family: "Segoe UI", PointSize: 12},
-						OnClicked: func() {
-							w.Hide()
-							if t.cfg.ChooseChannel != nil {
-								t.cfg.ChooseChannel(ChoiceQQ)
-							}
-						},
+						Layout:        VBox{MarginsZero: true, SpacingZero: true},
 					},
 				},
 			},
@@ -96,6 +88,24 @@ func (t *Tray) ensureChooserWindow() {
 	}.Create()
 	if err != nil {
 		t.cfg.Logger.Error("创建通道选择窗口失败", "err", err)
+		return
+	}
+	choose := func(choice ChannelChoice) func() {
+		return func() {
+			w.Hide()
+			if t.cfg.ChooseChannel != nil {
+				t.cfg.ChooseChannel(choice)
+			}
+		}
+	}
+	if _, err := newChannelCard(hostWX, "微信",
+		[]string{"手机微信扫码授权", "无需加好友"}, choose(ChoiceWeChat)); err != nil {
+		t.cfg.Logger.Error("创建微信卡片失败", "err", err)
+		return
+	}
+	if _, err := newChannelCard(hostQQ, "QQ 机器人",
+		[]string{"官方机器人平台", "私聊即可打字"}, choose(ChoiceQQ)); err != nil {
+		t.cfg.Logger.Error("创建 QQ 卡片失败", "err", err)
 		return
 	}
 	t.chooserWin = w
@@ -110,13 +120,7 @@ func (t *Tray) ensureChooserWindow() {
 	})
 	win.RoundCorners(uintptr(w.Handle()))
 	win.EnableDarkTitlebar(uintptr(w.Handle()), dark)
-	if dark {
-		// 深色窗口底上的原生按钮必须切深色主题，否则是刺眼的白色块
-		if btnWX != nil {
-			win.SetWindowThemeDark(uintptr(btnWX.Handle()))
-		}
-		if btnQQ != nil {
-			win.SetWindowThemeDark(uintptr(btnQQ.Handle()))
-		}
-	}
+	// 标题栏/边框与窗口底融合，消除老对话框的割裂感（Win11；旧系统静默失败）
+	win.SetCaptionColor(uintptr(w.Handle()), uint32(pal.Window))
+	win.SetBorderColor(uintptr(w.Handle()), uint32(pal.Stroke))
 }

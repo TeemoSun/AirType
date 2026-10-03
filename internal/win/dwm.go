@@ -65,6 +65,23 @@ func EnableDarkTitlebar(hwnd uintptr, dark bool) {
 		uintptr(unsafe.Pointer(&v)), unsafe.Sizeof(v))
 }
 
+// SetCaptionColor 把标题栏染成指定色（DWMWA_CAPTION_COLOR，Win11 22000+），
+// 与窗口底融合，消除"老对话框"式的标题栏割裂感。colorref 为 GDI 式
+// 0x00BBGGRR（walk.Color 低 24 位即此格式）。失败静默（旧系统无此属性）。
+func SetCaptionColor(hwnd uintptr, colorref uint32) {
+	const dwmwaCaptionColor = 35
+	pDwmSetWindowAttribute.Call(hwnd, dwmwaCaptionColor,
+		uintptr(unsafe.Pointer(&colorref)), unsafe.Sizeof(colorref))
+}
+
+// SetBorderColor 染窗口边框（DWMWA_BORDER_COLOR，Win11 22000+）。
+// colorref 格式同 SetCaptionColor。失败静默。
+func SetBorderColor(hwnd uintptr, colorref uint32) {
+	const dwmwaBorderColor = 34
+	pDwmSetWindowAttribute.Call(hwnd, dwmwaBorderColor,
+		uintptr(unsafe.Pointer(&colorref)), unsafe.Sizeof(colorref))
+}
+
 // FixWindowSize 禁止拖拽缩放与最大化（流程窗口：选通道/扫码不应被拉成全屏）。
 // walk 判定固定尺寸的依据正是无 WS_THICKFRAME。
 func FixWindowSize(hwnd uintptr) {

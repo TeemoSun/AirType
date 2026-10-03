@@ -117,7 +117,7 @@ type Tray struct {
 
 	chooserWin *walk.MainWindow
 	qrWin      *walk.MainWindow
-	qrView     *walk.ImageView
+	qrCard     *qrCard
 	qrTitleLbl *walk.Label
 	qrHintLbl  *walk.Label
 	qrShown    bool
@@ -150,6 +150,9 @@ func NewTray(cfg Config) (*Tray, error) {
 	_ = ni.SetToolTip("AirType · 启动中…")
 	_ = ni.SetVisible(true)
 
+	// 原生菜单深浅色跟随系统（托盘菜单/弹窗右键菜单）；uxtheme 桩指纹
+	// 不符时内部静默放弃，仅影响观感
+	win.EnableDarkMenus()
 	t.buildMenu()
 	t.attachTrayClick()
 

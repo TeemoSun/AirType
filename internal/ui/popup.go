@@ -31,7 +31,9 @@ func relTime(t time.Time) string {
 }
 
 // clampText 折叠换行为空格并截断到 maxRunes（不追加省略号：
-// 绘制时的 TextEndEllipsis 负责尾省略，避免双重省略号）。
+// 绘制时的 TextEndEllipsis 按实际行宽做尾省略，避免双重省略号）。
+// maxRunes 只是防病态长文本的成本上限，须远大于任何行宽能显示的
+// 字符数——早期设 36 导致高 DPI 宽行下"未到行宽就静默截断"（评审实锤）。
 func clampText(s string, maxRunes int) string {
 	out := make([]rune, 0, maxRunes)
 	n := 0
@@ -58,9 +60,9 @@ var (
 
 // 布局常量（96dpi 基准）。
 const (
-	flRowH96       = 54 // 行高
-	flTextPad96    = 18
-	flMaxTextRunes = 36
+	flRowH96       = 54                      // 行高
+	flTextPad96    = 18                      // 行内文字左右留白
+	flMaxTextRunes = 300                     // 显示文本的成本上限（显示截断由绘制期省略号按行宽做）
 	flCopyFlash    = 1200 * time.Millisecond // "已复制"行内反馈时长
 	flMsgFlash     = 2200 * time.Millisecond // "新消息已入历史"头部提示时长
 	flRelTimeTick  = 30 * time.Second        // 相对时间刷新间隔
@@ -114,7 +116,7 @@ func (t *Tray) ensureHistoryPopup() {
 				Background: SolidColorBrush{Color: pal.Window},
 				Layout:     HBox{Margins: Margins{Left: 20, Top: 14, Right: 20, Bottom: 8}, Spacing: 6},
 				Children: []Widget{
-					Label{Text: "AirType", Font: Font{Family: "Segoe UI", PointSize: 14, Bold: true}, TextColor: pal.Text},
+					Label{Text: "AirType", Font: Font{Family: DisplayFontFamily(), PointSize: 14, Bold: true}, TextColor: pal.Text},
 					Label{AssignTo: &status, Text: "●", TextColor: colDotGray},
 					Label{AssignTo: &statusText, Text: "未绑定", TextColor: pal.TextSecondary},
 					HSpacer{},
@@ -407,7 +409,7 @@ type fluentItem struct {
 	at      time.Time
 }
 
-// fluentList 是自绘的 Fluent 风格列表：无网格线，悬停/选中高亮，
+// fluentList 是自绘的 Fluent 风格列表：无网格线，悬停/选中圆角高亮，
 // 每条两行（内容 + 相对时间/已复制），滚轮翻页，右侧迷你滚动条，
 // 左键复制、右键菜单（复制/删除/重新打字），键盘 ↑↓ 导航。
 type fluentList struct {
@@ -425,9 +427,6 @@ type fluentList struct {
 
 	fntText *walk.Font
 	fntTime *walk.Font
-	brHover *walk.SolidColorBrush
-	brSel   *walk.SolidColorBrush
-	brThumb *walk.SolidColorBrush
 	brBkgnd *walk.SolidColorBrush
 }
 
@@ -436,19 +435,10 @@ func newFluentList(parent walk.Container, p *historyPopup) (*fluentList, error) 
 	fl := &fluentList{p: p, pal: pal, hover: -1, sel: -1, copiedID: -1}
 
 	var err error
-	if fl.fntText, err = walk.NewFont("Segoe UI", 9, 0); err != nil {
+	if fl.fntText, err = walk.NewFont(UIFontFamily(), 9, 0); err != nil {
 		return nil, err
 	}
-	if fl.fntTime, err = walk.NewFont("Segoe UI", 8, 0); err != nil {
-		return nil, err
-	}
-	if fl.brHover, err = walk.NewSolidColorBrush(pal.Hover); err != nil {
-		return nil, err
-	}
-	if fl.brSel, err = walk.NewSolidColorBrush(pal.Selection); err != nil {
-		return nil, err
-	}
-	if fl.brThumb, err = walk.NewSolidColorBrush(pal.ScrollThumb); err != nil {
+	if fl.fntTime, err = walk.NewFont(UIFontFamily(), 8, 0); err != nil {
 		return nil, err
 	}
 	if fl.brBkgnd, err = walk.NewSolidColorBrush(pal.Window); err != nil {
@@ -698,16 +688,15 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	y := 0
 	for i := fl.scroll; i < len(fl.items) && y < bounds.Height; i++ {
 		it := fl.items[i]
-		// 行背景：键盘选中 > 悬停 > 无（去掉斑马纹：Fluent 列表靠悬停不靠条纹）
-		var brush walk.Brush
-		if i == fl.sel {
-			brush = fl.brSel
-		} else if i == fl.hover {
-			brush = fl.brHover
-		}
-		if brush != nil {
+		// 行背景：键盘选中 > 悬停 > 无（去掉斑马纹：Fluent 列表靠悬停不靠条纹）。
+		// 圆角 pill；位图链路失败时 fillRoundRect 自动回退方角。
+		if i == fl.sel || i == fl.hover {
+			base := pal.Hover
+			if i == fl.sel {
+				base = pal.Selection // 强调色 8% 预混（theme.go 派生）
+			}
 			rect := walk.Rectangle{X: 6, Y: y + 2, Width: bounds.Width - 12, Height: rowH - 4}
-			if err := canvas.FillRectanglePixels(brush, rect); err != nil {
+			if err := fillRoundRect(canvas, rect, 6, base); err != nil {
 				return err
 			}
 		}
@@ -747,8 +736,11 @@ func (fl *fluentList) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		if maxScroll > 0 {
 			thumbY = (bounds.Height - thumbH) * fl.scroll / maxScroll
 		}
-		rect := walk.Rectangle{X: bounds.Width - 6, Y: thumbY, Width: 4, Height: thumbH}
-		if err := canvas.FillRectanglePixels(fl.brThumb, rect); err != nil {
+		// 滑块几何按 DPI 缩放（写死物理像素会在高 DPI 下小到画不了圆角）
+		thumbW := walk.IntFrom96DPI(4, dpi)
+		margin := walk.IntFrom96DPI(2, dpi)
+		rect := walk.Rectangle{X: bounds.Width - thumbW - margin, Y: thumbY, Width: thumbW, Height: thumbH}
+		if err := fillRoundRect(canvas, rect, 2, pal.ScrollThumb); err != nil {
 			return err
 		}
 	}

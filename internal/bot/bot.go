@@ -79,7 +79,7 @@ func New(opts Options) (*Bot, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	store, err := login.NewFileTokenStore(opts.DataDir)
+	store, err := newDPAPITokenStore(opts.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("bot: 创建 token 存储失败: %w", err)
 	}

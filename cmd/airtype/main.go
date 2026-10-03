@@ -133,14 +133,12 @@ func run(dataDir string) int {
 	if qqBound {
 		tray.SetChannelMode(ui.ChannelQQ)
 		if err := a.startQQ(false); err != nil {
-			logger.Error("启动 QQ 机器人失败", "err", err)
-			tray.NotifyError("AirType", "QQ 通道启动失败："+err.Error())
+			a.notifyErr("QQ 通道启动失败", err)
 		}
 	} else if _, err := os.Stat(filepath.Join(dir, "default.json")); err == nil {
 		tray.SetChannelMode(ui.ChannelWeChat)
 		if err := a.startBot(); err != nil {
-			logger.Error("启动 bot 失败", "err", err)
-			tray.NotifyError("AirType", "微信通道启动失败："+err.Error())
+			a.notifyErr("微信通道启动失败", err)
 		}
 	} else {
 		tray.SetChannelMode(ui.ChannelNone)
@@ -393,9 +391,8 @@ func (a *app) startQQ(withBind bool) error {
 		if withBind {
 			if _, err := b.Bind(ctx); err != nil {
 				if !errors.Is(err, context.Canceled) {
-					a.logger.Error("QQ 绑定失败", "err", err)
 					a.tray.HideQR()
-					a.tray.NotifyError("AirType", "QQ 绑定失败："+err.Error())
+					a.notifyErr("QQ 绑定失败", err)
 				}
 				return
 			}
@@ -444,8 +441,7 @@ func (a *app) switchChannel(c ui.ChannelChoice) {
 	a.tray.SetState(ui.StateNeedQR)
 	if c == ui.ChoiceQQ {
 		if err := a.startQQ(true); err != nil {
-			a.logger.Error("启动 QQ 绑定流程失败", "err", err)
-			a.tray.NotifyError("AirType", "QQ 绑定启动失败："+err.Error())
+			a.notifyErr("QQ 绑定启动失败", err)
 		}
 		return
 	}
@@ -454,8 +450,7 @@ func (a *app) switchChannel(c ui.ChannelChoice) {
 		a.logger.Warn("清理微信 token 失败", "err", err)
 	}
 	if err := a.startBot(); err != nil {
-		a.logger.Error("启动微信绑定失败", "err", err)
-		a.tray.NotifyError("AirType", "微信通道启动失败："+err.Error())
+		a.notifyErr("微信通道启动失败", err)
 	}
 }
 
@@ -552,7 +547,7 @@ func (a *app) inject(text string) error {
 	err := typer.Type(text)
 	if err != nil {
 		a.logger.Error("注入失败", "err", err, "fgWindow", fgTitle, "fgProc", fgExe)
-		a.tray.NotifyError("AirType", "注入失败："+err.Error())
+		a.tray.NotifyError("AirType", "打字失败："+friendlyError(err)+"（详情见日志）")
 		return err
 	}
 	// 自动回车：文字已在输入框里，再补一次回车把消息发送出去。
@@ -589,4 +584,35 @@ func (a *app) stats() (received, dropped int) {
 
 func openExplorerSelect(path string) {
 	_ = exec.Command("explorer", "/select,"+path).Start()
+}
+
+// friendlyError 把底层错误归类为一句用户能看懂的文案；
+// 原始错误只进日志，不进气泡（用户看到 Go 错误串只会更困惑）。
+func friendlyError(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(s, "sendinput"):
+		return "目标窗口权限更高（如管理员程序），无法注入；可从历史复制后手动粘贴"
+	case strings.Contains(s, "context deadline exceeded"), strings.Contains(s, "timeout"),
+		strings.Contains(s, "dial tcp"), strings.Contains(s, "connection"),
+		strings.Contains(s, "eof"), strings.Contains(s, "网络"):
+		return "网络连接异常，请检查网络后重试"
+	case strings.Contains(s, "http 5"):
+		return "服务暂时不可用，请稍后重试"
+	case strings.Contains(s, "http 4"):
+		return "请求被服务方拒绝"
+	case strings.Contains(s, "access is denied"), strings.Contains(s, "拒绝访问"):
+		return "权限不足"
+	default:
+		return "发生内部错误"
+	}
+}
+
+// notifyErr 统一错误气泡：一句人话 + 详情指向日志。
+func (a *app) notifyErr(context string, err error) {
+	a.logger.Error(context, "err", err)
+	a.tray.NotifyError("AirType", context+"："+friendlyError(err)+"（详情见日志）")
 }

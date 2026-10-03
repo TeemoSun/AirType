@@ -294,7 +294,7 @@ func (t *Tray) buildMenu() {
 		want := !autostart.Checked()
 		if err := t.cfg.AutostartSet(want); err != nil {
 			t.cfg.Logger.Error("设置开机自启失败", "want", want, "err", err)
-			_ = t.ni.ShowError("AirType", "设置开机自启失败："+err.Error())
+			_ = t.ni.ShowError("AirType", "设置开机自启失败；详情见日志")
 			return
 		}
 		autostart.SetChecked(want)

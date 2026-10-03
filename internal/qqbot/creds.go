@@ -8,9 +8,12 @@ package qqbot
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/TeemoSun/AirType/internal/secret"
 )
 
 // credsFile 是 QQ 机器人凭据在数据目录下的持久化文件名。
@@ -24,6 +27,8 @@ type Creds struct {
 }
 
 // LoadCreds 读取已保存的凭据；未绑定时返回 ok=false。
+// 文件内容经 DPAPI 加密（旧版明文读取后自动迁移）；
+// 解密失败（换用户/机器）返回错误，调用方应引导重新扫码绑定。
 func LoadCreds(dir string) (Creds, bool, error) {
 	var c Creds
 	data, err := os.ReadFile(filepath.Join(dir, credsFile))
@@ -33,18 +38,29 @@ func LoadCreds(dir string) (Creds, bool, error) {
 		}
 		return c, false, err
 	}
-	if err := json.Unmarshal(data, &c); err != nil {
+	plain, sealed, err := secret.Open(data)
+	if err != nil {
+		return Creds{}, false, fmt.Errorf("qqbot: 凭据解密失败（可能来自其他用户/机器）: %w", err)
+	}
+	if err := json.Unmarshal(plain, &c); err != nil {
 		return Creds{}, false, err
 	}
 	if c.AppID == "" || c.AppSecret == "" {
 		return Creds{}, false, nil
 	}
+	if !sealed {
+		_ = SaveCreds(dir, c) // 旧版明文：立即迁移为加密存储
+	}
 	return c, true, nil
 }
 
-// SaveCreds 原子写入凭据。
+// SaveCreds 原子写入凭据（DPAPI 加密后落盘）。
 func SaveCreds(dir string, c Creds) error {
 	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	cipher, err := secret.Seal(append(data, '\n'))
 	if err != nil {
 		return err
 	}
@@ -55,7 +71,7 @@ func SaveCreds(dir string, c Creds) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
+	if _, err := tmp.Write(cipher); err != nil {
 		tmp.Close()
 		return err
 	}
